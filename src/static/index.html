@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Conversation dashboard</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>Conversation dashboard</h1>
+      <div class="topbar-meta">
+        <span id="registry-summary" class="muted">loading registry…</span>
+      </div>
+    </header>
+
+    <main class="layout">
+      <!-- setup -->
+      <section class="panel setup" aria-label="Run setup">
+        <form id="run-form">
+          <fieldset class="agent" data-slot="a">
+            <legend><span class="dot dot-a"></span> Agent A</legend>
+            <label class="field">
+              <span>Name</span>
+              <input name="a-name" value="buyer" required autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>Model</span>
+              <select name="a-model" required></select>
+            </label>
+            <div class="field-row">
+              <label class="field">
+                <span>Temperature</span>
+                <input name="a-temperature" type="number" step="0.1" min="0" max="2"
+                       placeholder="default" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>Max tokens</span>
+                <input name="a-max-tokens" type="number" min="1" step="1"
+                       placeholder="default" autocomplete="off" />
+              </label>
+            </div>
+            <label class="field">
+              <span>System prompt</span>
+              <textarea name="a-system" rows="8" spellcheck="false"></textarea>
+            </label>
+          </fieldset>
+
+          <div class="swap-row">
+            <button type="button" id="swap" class="ghost" title="Swap the two agents">
+              ⇅ swap agents
+            </button>
+          </div>
+
+          <fieldset class="agent" data-slot="b">
+            <legend><span class="dot dot-b"></span> Agent B</legend>
+            <label class="field">
+              <span>Name</span>
+              <input name="b-name" value="seller" required autocomplete="off" />
+            </label>
+            <label class="field">
+              <span>Model</span>
+              <select name="b-model" required></select>
+            </label>
+            <div class="field-row">
+              <label class="field">
+                <span>Temperature</span>
+                <input name="b-temperature" type="number" step="0.1" min="0" max="2"
+                       placeholder="default" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>Max tokens</span>
+                <input name="b-max-tokens" type="number" min="1" step="1"
+                       placeholder="default" autocomplete="off" />
+              </label>
+            </div>
+            <label class="field">
+              <span>System prompt</span>
+              <textarea name="b-system" rows="8" spellcheck="false"></textarea>
+            </label>
+          </fieldset>
+
+          <fieldset class="agent">
+            <legend>Conversation</legend>
+            <div class="field-row">
+              <label class="field">
+                <span>Max turns</span>
+                <input name="max-turns" type="number" min="1" max="40" value="6" required />
+              </label>
+              <label class="field">
+                <span>Opens</span>
+                <select name="opening-speaker"></select>
+              </label>
+            </div>
+            <label class="field">
+              <span>Opening prompt</span>
+              <textarea name="opening-prompt" rows="3" spellcheck="false"></textarea>
+            </label>
+          </fieldset>
+
+          <div class="actions">
+            <button type="submit" id="run" class="primary">Run conversation</button>
+            <button type="button" id="cancel" class="danger" hidden>Cancel</button>
+          </div>
+          <p id="form-error" class="error" hidden></p>
+        </form>
+      </section>
+
+      <!-- transcript -->
+      <section class="panel stream" aria-label="Transcript">
+        <div class="stats" id="stats">
+          <div class="tile">
+            <span class="tile-label">Status</span>
+            <span class="tile-value" id="stat-status">idle</span>
+            <span class="tile-sub" id="stat-status-sub">no run yet</span>
+          </div>
+          <div class="tile">
+            <span class="tile-label">Turns</span>
+            <span class="tile-value" id="stat-turns">0</span>
+            <span class="tile-sub" id="stat-turns-sub">of 0</span>
+          </div>
+          <div class="tile">
+            <span class="tile-label">Tokens</span>
+            <span class="tile-value" id="stat-tokens">0</span>
+            <span class="tile-sub" id="stat-tokens-sub">0 in / 0 out</span>
+          </div>
+          <div class="tile">
+            <span class="tile-label">Est. cost</span>
+            <span class="tile-value" id="stat-cost">$0.0000</span>
+            <span class="tile-sub" id="stat-cost-sub">registry prices</span>
+          </div>
+          <div class="tile">
+            <span class="tile-label">Model time</span>
+            <span class="tile-value" id="stat-latency">0.0s</span>
+            <span class="tile-sub" id="stat-latency-sub">summed latency</span>
+          </div>
+        </div>
+
+        <div class="participants" id="participants" hidden></div>
+
+        <div class="turns" id="turns">
+          <p class="empty">
+            Pick two models, edit the system prompts, and hit <strong>Run conversation</strong>.
+            Turns stream in as each model replies.
+          </p>
+        </div>
+      </section>
+
+      <!-- history -->
+      <section class="panel history" aria-label="History">
+        <div class="history-head">
+          <h2>Saved runs</h2>
+          <button type="button" id="refresh-history" class="ghost" title="Reload">↻</button>
+        </div>
+        <ul id="history-list" class="history-list"></ul>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

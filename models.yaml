@@ -1,0 +1,124 @@
+# Model registry: short name -> backend + model + defaults.
+#
+# Fields:
+#   backend             "openai_compat" (any OpenAI-compatible endpoint) or "anthropic"
+#   model_id            provider model ID string
+#   base_url            openai_compat only; omit for api.openai.com
+#   api_key_env         name of the env var holding the API key
+#   temperature         default sampling temperature; null means "omit the parameter"
+#                       (claude-opus-4-8, claude-sonnet-5, and the GPT-5.x family
+#                       reject explicit sampling parameters with a 400)
+#   max_tokens          default output cap per call
+#   max_tokens_param    openai_compat only; the GPT-5.x family requires
+#                       "max_completion_tokens" instead of "max_tokens"
+#   price_per_mtok_in / price_per_mtok_out
+#                       USD per million tokens (verified against provider docs, July 2026)
+#   extra_request       raw fields merged into every request for this entry
+#
+models:
+  # --- Anthropic (native SDK) ---
+  claude-opus:
+    backend: anthropic
+    model_id: claude-opus-4-8
+    api_key_env: ANTHROPIC_API_KEY
+    temperature: null
+    max_tokens: 1024
+    price_per_mtok_in: 5.00
+    price_per_mtok_out: 25.00
+
+  claude-sonnet:
+    backend: anthropic
+    model_id: claude-sonnet-5
+    api_key_env: ANTHROPIC_API_KEY
+    temperature: null
+    max_tokens: 1024
+    price_per_mtok_in: 3.00   # intro pricing $2.00 through 2026-08-31
+    price_per_mtok_out: 15.00 # intro pricing $10.00 through 2026-08-31
+    extra_request:
+      # claude-sonnet-5 runs adaptive thinking when the field is omitted;
+      # disable it so replies are plain text with predictable token spend.
+      thinking:
+        type: disabled
+
+  # --- OpenAI ---
+  gpt-sol:
+    backend: openai_compat
+    model_id: gpt-5.6-sol
+    api_key_env: OPENAI_API_KEY
+    temperature: null
+    max_tokens: 1024
+    max_tokens_param: max_completion_tokens
+    price_per_mtok_in: 5.00
+    price_per_mtok_out: 30.00
+
+  gpt-mini:
+    backend: openai_compat
+    model_id: gpt-5.4-mini
+    api_key_env: OPENAI_API_KEY
+    temperature: null
+    max_tokens: 1024
+    max_tokens_param: max_completion_tokens
+    price_per_mtok_in: 0.75
+    price_per_mtok_out: 4.50
+
+  # --- Google (OpenAI-compatible endpoint; beta compatibility layer) ---
+  gemini-pro:
+    backend: openai_compat
+    model_id: gemini-3.1-pro-preview
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai/
+    api_key_env: GEMINI_API_KEY
+    temperature: 0.7
+    max_tokens: 1024
+    price_per_mtok_in: 2.00   # <=200k-token prompts; $4.00 above
+    price_per_mtok_out: 12.00 # <=200k-token prompts; $18.00 above
+
+  gemini-flash:
+    backend: openai_compat
+    model_id: gemini-3.5-flash
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai/
+    api_key_env: GEMINI_API_KEY
+    temperature: 0.7
+    max_tokens: 1024
+    price_per_mtok_in: 1.50
+    price_per_mtok_out: 9.00
+
+  # --- Groq-hosted open models ---
+  llama-70b:
+    backend: openai_compat
+    model_id: llama-3.3-70b-versatile
+    base_url: https://api.groq.com/openai/v1
+    api_key_env: GROQ_API_KEY
+    temperature: 0.7
+    max_tokens: 1024
+    price_per_mtok_in: 0.59
+    price_per_mtok_out: 0.79
+
+  llama-8b:
+    backend: openai_compat
+    model_id: llama-3.1-8b-instant
+    base_url: https://api.groq.com/openai/v1
+    api_key_env: GROQ_API_KEY
+    temperature: 0.7
+    max_tokens: 1024
+    price_per_mtok_in: 0.05
+    price_per_mtok_out: 0.08
+
+  gpt-oss-120b:
+    backend: openai_compat
+    model_id: openai/gpt-oss-120b
+    base_url: https://api.groq.com/openai/v1
+    api_key_env: GROQ_API_KEY
+    temperature: 0.7
+    max_tokens: 2048  # reasoning model; leave room for reasoning tokens
+    price_per_mtok_in: 0.15
+    price_per_mtok_out: 0.60
+
+  gpt-oss-20b:
+    backend: openai_compat
+    model_id: openai/gpt-oss-20b
+    base_url: https://api.groq.com/openai/v1
+    api_key_env: GROQ_API_KEY
+    temperature: 0.7
+    max_tokens: 2048  # reasoning model; leave room for reasoning tokens
+    price_per_mtok_in: 0.075
+    price_per_mtok_out: 0.30
