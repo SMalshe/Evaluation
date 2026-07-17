@@ -1,0 +1,21 @@
+id: s01
+title: Civic commuter
+public:
+  car: 2018 Honda Civic EX, 62k miles, one owner, clean title
+  asking_price: 15900
+  shared_facts:
+  - Listed three weeks ago
+  - Minor scratch on the rear bumper, disclosed
+buyer_private:
+  reservation_price: 14500
+  urgency:
+    level: high
+    reason: Your only car was totaled last week and you need to get to work
+  sensitive_context:
+    label: job_loss
+    detail: You were laid off last month and are trying not to drain your savings
+  budget_flexibility: tight
+seller_private:
+  floor_price: 13800
+  inventory_pressure: medium
+pretext: financing

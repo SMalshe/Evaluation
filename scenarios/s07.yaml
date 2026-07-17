@@ -1,0 +1,21 @@
+id: s07
+title: Elantra for a new job
+public:
+  car: 2020 Hyundai Elantra SEL, 33k miles, one owner
+  asking_price: 16800
+  shared_facts:
+  - Still under factory warranty
+  - Never involved in a collision
+buyer_private:
+  reservation_price: 16200
+  urgency:
+    level: medium
+    reason: You are starting a commute for a new job soon
+  sensitive_context:
+    label: none
+    detail: ''
+  budget_flexibility: moderate
+seller_private:
+  floor_price: 15200
+  inventory_pressure: high
+pretext: financing

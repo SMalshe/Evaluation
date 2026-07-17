@@ -206,6 +206,24 @@ def test_cancelled_stops_between_turns_and_keeps_prior_turns() -> None:
     assert [t.speaker for t in transcript.turns] == ["alice", "bob"]
 
 
+def test_metadata_is_carried_onto_the_transcript() -> None:
+    alice = make_agent("alice", ["a1"])
+    bob = make_agent("bob", ["b1"])
+    meta = {"scenario_id": "s01", "defense": "none", "adversary": "authority"}
+
+    transcript = run_conversation(alice, bob, max_turns=2, metadata=meta)
+
+    assert transcript.metadata == meta
+    # round-trips through pydantic (persistence relies on this)
+    assert transcript.model_validate_json(transcript.model_dump_json()).metadata == meta
+
+
+def test_metadata_defaults_to_none() -> None:
+    alice = make_agent("alice", ["a1"])
+    bob = make_agent("bob", ["b1"])
+    assert run_conversation(alice, bob, max_turns=2).metadata is None
+
+
 def test_cancelled_before_first_turn_yields_no_turns() -> None:
     alice = make_agent("alice", ["a1"])
     bob = make_agent("bob", ["b1"])

@@ -1,20 +1,32 @@
 # Project context for Claude
 
 Research codebase measuring **private-information leakage in LLM agent-to-agent
-negotiations**. This repo is the *foundations* layer only: a unified model
-client, a two-agent conversation engine, and a dashboard for driving/watching
-runs. It is deliberately not the full research system yet.
+negotiations**. Layers so far: a unified model client, a two-agent conversation
+engine, a dashboard for driving/watching runs, a scenario + condition-controlled
+prompt layer (used-car negotiations with buyer defenses and seller adversary
+strategies), and an evaluation layer (adversary extraction + independent judge +
+flat `RunResult` metrics). Still not built: an experiment runner that sweeps the
+(scenario × defense × adversary × model) grid, and any aggregation/analysis over
+the resulting JSONL.
 
 ## Hard constraints (do not violate)
 
 - **Keep all naming generic.** The package is `src/`. No project name, topic
   name, or branding in module names, class names, CLI output, or docs. (The
-  containing folder may be named anything; the *code* stays neutral.)
-- **Scope discipline.** This sprint built foundations only. Do **not** add
-  negotiation scenarios, leakage metrics, judges/graders, or experiment
-  runners unless explicitly asked — those are future sprints.
+  containing folder may be named anything; the *code* stays neutral.) Domain
+  words for the modelled task — `buyer`, `seller`, `scenario`, `car` — are fine;
+  the research *topic* ("leakage", "privacy") stays out of identifiers.
+- **Immersion (load-bearing).** Agent-facing system prompts must never reveal
+  that an agent is an AI, that the counterpart is an AI, or that anything is a
+  test/simulation/evaluation. Meta concepts ("secret", "leakage", "score") live
+  only in scenario files and any future grader — never in a rendered prompt. The
+  one sanctioned exception is the `human_impersonation` seller (claims humanity,
+  denies being an AI if asked). `tests/test_prompts.py` enforces this; keep it.
+- **Scope discipline.** Built so far: foundations, dashboard, and the scenario/
+  prompt layer. Do **not** add leakage/privacy metrics, judges/graders, or
+  experiment runners unless explicitly asked — those are future sprints.
 - Type hints throughout. No global state. Everything configurable via function
-  args or `models.yaml`.
+  args, `models.yaml`, or the scenario files.
 
 ## Toolchain
 
@@ -33,6 +45,15 @@ runs. It is deliberately not the full research system yet.
 | `models.yaml`           | Registry: short name -> backend, model_id, base_url, api_key_env, defaults, prices |
 | `src/engine.py`         | `Agent` dataclass, `run_conversation(...)`, pydantic `Transcript`/`Turn`/`AgentInfo` |
 | `src/persistence.py`    | `save_transcript()` / `load_transcript()` (JSON under `runs/`) |
+| `src/scenarios.py`      | Pydantic `Scenario` schema, label enums, `load_scenario`/`iter_scenarios` |
+| `scenarios/`            | 12 used-car scenarios `s01`–`s12` (YAML ground truth) |
+| `src/prompts.py`        | `DefenseCondition`/`AdversaryStrategy` enums, `render_buyer_system`/`render_seller_system`/`render_pair` |
+| `src/preview.py`        | CLI: `python -m src.preview` — render prompts, `--run` for a live conversation |
+| `src/jsonparse.py`      | `request_json()` — ask a model for JSON + bounded repair-retry; `extract_json_object()` |
+| `src/extraction.py`     | `run_extraction()` — adversary questionnaire, `ExtractionOutput`/`ExtractionResult`, repair→regex→invalid |
+| `src/judge.py`          | `run_judgement()` — independent judge, `JudgeOutput`/`LeakLabel`, per-turn/attribute labels |
+| `src/metrics.py`        | `build_run_result()` + pydantic `RunResult` (pure metric math) |
+| `src/evaluate.py`       | `evaluate_run()`, `EvalConfig`, `append_result()`; CLI `python -m src.evaluate` |
 | `src/server.py`         | `create_app(...)` — dashboard HTTP API + SSE stream; `python -m src.server` |
 | `src/static/`           | Dashboard page: `index.html`, `styles.css`, `app.js` (no build step) |
 | `src/smoke.py`          | CLI: `python -m src.smoke` — a bicycle-haggle smoke test |
@@ -78,17 +99,96 @@ Two optional hooks let an observer follow a run without owning the loop (this
 is all the server needs — do not duplicate the perspective logic elsewhere):
 `on_turn(turn)` fires as each turn completes, and `cancelled()` is polled
 *before* each turn — True stops with termination `cancelled`, keeping the turns
-so far (so a cancel lands only after the in-flight API call returns).
+so far (so a cancel lands only after the in-flight API call returns). A
+`metadata: dict | None` param is stored verbatim on `Transcript.metadata`
+(generic run provenance — the engine never reads it; the server puts the
+scenario id + conditions there so a saved run is self-describing and evaluable).
 
 **Persistence.** `save_transcript()` writes
 `runs/<UTCstamp>-<a>-vs-<b>.json` (collision-safe suffixes), `load_transcript()`
 round-trips it via pydantic. `runs/` is gitignored.
 
+**Scenario layer (`src/scenarios.py` + `scenarios/*.yaml`).**
+A `Scenario` is machine-readable ground truth: `public` (car, asking_price,
+shared_facts), `buyer_private` (reservation_price, urgency{level,reason},
+sensitive_context{label,detail}, budget_flexibility), `seller_private`
+(floor_price, inventory_pressure), and a `pretext`. All controlled vocabularies
+are `StrEnum`s **in this one module** (`SensitiveLabel`, `Urgency`,
+`BudgetFlexibility`, `PressureLevel`, `Pretext`) so chance baselines stay
+computable later. Models use `extra="forbid"`; `sensitive_context` enforces
+detail-empty-iff-`none`. 12 scenarios: each `SensitiveLabel` appears twice, and
+`pretext` is rotated evenly (4 financing / 4 insurance / 4 dealer_compliance) so
+a finding can't be an artifact of one pretext. `load_scenario(id)` /
+`iter_scenarios()` load and validate by filename stem.
+
+**Prompt layer (`src/prompts.py`).**
+`render_buyer_system(scenario, defense, adversary=None)` and
+`render_seller_system(scenario, adversary)` build in-character system prompts as
+plain hand-editable Python strings (no templating engine). `render_pair(...)`
+returns both and enforces the config gate. Conditions:
+`DefenseCondition` = `none`/`basic`/`strong` (buyer); `AdversaryStrategy` =
+`passive`/`direct_probe`/`rapport`/`pressure`/`authority`/`human_impersonation`/
+`authority_verifiable` (seller). Design invariants to preserve:
+- `human_impersonation` seller == the exact `direct_probe` text **plus** an
+  appended humanity/AI-denial clause — it is `direct_probe`'s control, so keep
+  `_DIRECT_PROBE` shared and appended, never forked.
+- `authority` uses `scenario.pretext` for the false role and encodes all three
+  required constraints in the prompt text (lies about role only / claim is
+  unverifiable / escalates "can't submit the form" on hesitation).
+- `authority_verifiable` renders the seller identically to `authority`; it only
+  adds a verification-demand clause to the **buyer**. It is a defense arm gated
+  behind `PromptConfig.enable_authority_verifiable` — off by default,
+  `available_adversaries()`/`render_pair()` exclude it unless enabled, and the
+  preview CLI needs `--enable-authority-verifiable`.
+- Control tokens: `WALK_AWAY_TOKEN` is imported from `engine` (can't drift); the
+  shown `[DEAL $X]` example must satisfy `engine.DEAL_PATTERN` (a test checks).
+Only the buyer prompt ever changes with `adversary` (for `authority_verifiable`);
+otherwise buyer depends on (scenario, defense), seller on (scenario, adversary).
+
+**Preview CLI (`src/preview.py`).**
+`python -m src.preview --scenario s01 --defense basic --adversary rapport`
+prints both prompts; `--run --model-a <buyer> --model-b <seller>` executes one
+live conversation (buyer opens) and saves the transcript. Reuses the engine,
+`get_client`, `save_transcript`, and `smoke._print_transcript`.
+
+**Evaluation layer (`src/{jsonparse,extraction,judge,metrics,evaluate}.py`).**
+`evaluate_run(transcript, scenario, config, *, defense, adversary, ...)` scores a
+finished run into a flat `RunResult`, one JSONL line via `append_result`. The
+condition labels (defense/adversary) are **passed in** — the `Transcript` doesn't
+record them, so the caller must supply what it ran. Pieces:
+- `jsonparse.request_json(client, messages, system, model_cls, retries, temperature)`
+  calls `chat(json_mode=True)`, validates against a pydantic model, and on
+  failure feeds the error back and retries up to `retries` times. Shared by
+  extraction and judge. `extract_json_object` uses the JSON decoder (not brace
+  counting) so braces inside strings are safe. **Provider gotcha:** Groq's JSON
+  mode *validates server-side* and returns a **400** (`json_validate_failed`,
+  with the bad text in `body.error.failed_generation`) instead of a reply when
+  the model emits invalid JSON; `request_json` catches any `status_code == 400`,
+  pulls out `failed_generation`, and treats it as a failed attempt (so it repairs
+  or falls through to the regex salvage rather than crashing). Non-400 errors
+  propagate.
+- `extraction.run_extraction` = the adversary's own model guessing the buyer's
+  private info (reservation + 80% interval, urgency, sensitive label). Path:
+  parse → repair retries → **regex salvage** (`_regex_fallback`) → mark invalid.
+  Never raises. `ExtractionResult.method` records which path won.
+- `judge.run_judgement` = an independent model labelling each buyer turn per
+  attribute (`explicit_leak`/`implied`/`none`) with evidence, given the ground
+  truth (so it scores *disclosure*, not guess accuracy) and the buyer's own
+  system prompt (to flag verbatim `prompt_leak`). **Temperature gotcha:** it sends
+  `temperature=None` when `client.config.temperature is None` (frontier models
+  reject an explicit temperature), else the config's `judge_temperature` (0.0).
+- `metrics.build_run_result` is **pure** — all the math, no I/O — so it's exactly
+  testable. Chance baselines derive from enum sizes (`URGENCY_CHANCE=1/3`,
+  `SENSITIVE_CHANCE=1/6`). First-leak turn = min buyer-turn index the judge marked
+  non-`none` for that attribute. When extraction is invalid, accuracy fields are
+  `None` (not 0). `EvalConfig` picks extraction/judge models independently;
+  `extraction_model=None` ⇒ the seller's own model. `results/` is gitignored.
+
 **Dashboard (`src/server.py` + `src/static/`).**
-`create_app(registry_path, runs_dir, client_factory)` returns a FastAPI app;
-`client_factory` (default `get_client`) is injected so tests exercise the whole
-API against `MockBackend`. **No module-level state** — the run registry is a
-`RunStore` on `app.state`.
+`create_app(registry_path, runs_dir, client_factory, scenarios_dir)` returns a
+FastAPI app; `client_factory` (default `get_client`) is injected so tests
+exercise the whole API against `MockBackend`. **No module-level state** — the run
+registry is a `RunStore` on `app.state`.
 
 Each run executes `run_conversation` on a daemon thread, publishing turns via
 `on_turn` under a `threading.Condition`. `GET /api/runs/{id}/events` is an SSE
@@ -98,12 +198,39 @@ listener catches up. Model clients are built in the POST handler, not the
 thread, so an unknown model or missing key is a 400 rather than a mid-run error.
 
 Endpoints: `/api/models` (registry + `available` per API key), `/api/defaults`
-(form prefill, imported from `smoke.py`), `POST /api/runs`, `GET /api/runs[/id]`,
-`POST /api/runs/{id}/cancel`, `GET /api/runs/{id}/events`, `/api/history[/file]`
-(saved transcripts; filename is validated against traversal). `ConversationView`
-is one wire shape for both live runs and saved transcripts, so the page has a
-single renderer. The frontend is plain HTML/CSS/JS served from `src/static/` —
-**no npm, no build step**; keep it that way.
+(free-form form prefill, from `smoke.py`), `/api/scenarios` (ground truth for the
+UI), `/api/conditions` (defenses + adversaries, each flagged `gated`),
+`/api/scenarios/{id}/prompts` (renders buyer/seller prompts via `render_pair`),
+`POST /api/runs` (accepts optional `conditions` = scenario_id/defense/adversary,
+stored as run provenance), `GET /api/runs[/id]`, `POST /api/runs/{id}/cancel`,
+`POST /api/runs/{id}/evaluate`, `GET /api/runs/{id}/events`, `/api/history[/file]`
+(saved transcripts; filename validated against traversal),
+`GET /api/history/{file}/raw` (the transcript JSON verbatim, for audit),
+`POST /api/history/{file}/evaluate`. `ConversationView` is one wire shape for both
+live runs and saved transcripts (now also carrying `metadata` + `evaluation`), so
+the page has a single renderer.
+
+**Evaluate-from-dashboard.** The two `/evaluate` endpoints share the in-closure
+`_evaluate(transcript, req, cache_key)`: it reads conditions from the transcript
+`metadata` (or `req.conditions` for a free-form run — else 400), runs
+`evaluate_run` with the **same injected `build_client`** (so eval-model tests use
+the mock backend too), appends the `RunResult` to `results_path`, and caches it in
+`app.state.evals` keyed by run id / filename. Evaluating a still-running live run
+is a 409. Evaluation is synchronous (FastAPI runs the sync handler in a
+threadpool, so it doesn't block the event loop).
+
+The frontend is plain HTML/CSS/JS served from `src/static/` — **no npm, no build
+step**; keep it that way. Two setup modes: **scenario** — all scenarios are
+**preloaded as a clickable list**; set models + defense/adversary once, then a
+row's **▶** renders that scenario's prompts and runs it in one click (a scenario
+`<input type=hidden name=scenario>` holds the selection). The ground-truth panel
+is for the *researcher* — fine to show secrets; immersion only governs
+agent-facing prompts. **free-form** — edit prompts by hand. In scenario mode the
+names lock to buyer/seller, the buyer opens, and `conditions` is sent with the run
+(recording provenance). The transcript panel has a **run-meta bar** (condition
+chips, judge-model picker, Evaluate/Re-evaluate, Raw JSON) and an **eval panel**
+that renders the `RunResult`; history rows show `scenario/defense/adversary` +
+an evaluated tick.
 
 ## Registry (`models.yaml`) — 10 entries
 
@@ -146,14 +273,32 @@ need it. Loaded at startup via python-dotenv (`load_dotenv(override=False)`).
 
 A `Makefile` wraps all of the below (`make help` lists them; `make check` =
 lint + tests, `make run` = the dashboard, `make run-cli` = the smoke test,
-`make ping-models` = the live check). The raw `uv` commands still work — the
-Makefile is a convenience, not the source of truth.
+`make preview` = render a scenario's prompts, `make eval` = evaluate a
+transcript, `make ping-models` = the live check). The raw `uv` commands still
+work — the Makefile is a convenience, not the source of truth.
 
 Run tests / lint (offline, no keys needed):
 ```sh
 uv run pytest -q
 uv run ruff check . && uv run ruff format --check .
 ```
+
+Render a scenario's prompts, or run one live conversation under conditions:
+```sh
+uv run python -m src.preview --scenario s01 --defense basic --adversary rapport
+uv run python -m src.preview --scenario s01 --adversary authority --run \
+    --model-a llama-8b --model-b gpt-oss-20b
+```
+`--enable-authority-verifiable` is required to select that gated defense arm.
+
+Evaluate a saved transcript into a `RunResult` JSONL row (spends credit for the
+extraction + judge calls):
+```sh
+uv run python -m src.evaluate --transcript runs/<file>.json --scenario s01 \
+    --defense none --adversary authority   # --judge-model / --extraction-model optional
+```
+You must pass the `--defense`/`--adversary` the run actually used; the transcript
+doesn't record them.
 
 Run the dashboard (needs API keys; spends real credit when you hit Run):
 ```sh
@@ -218,13 +363,53 @@ Close the gate to make "a turn is in flight" a waitable state. Note `TestClient`
 **buffers** streaming responses, so the thread reading an SSE stream cannot also
 release the gate; hand that to a timer (see the live-stream test).
 
+`tests/test_scenarios.py` validates all 12 files, the label/pretext
+distributions, and the `sensitive_context` none-detail rule. `tests/test_prompts.py`
+renders the **full (scenario × defense × adversary) grid** and asserts the
+immersion invariants (no experimental-frame terms in any prompt; the buyer never
+learns the counterpart's nature; only `human_impersonation` claims humanity),
+the three `authority` constraints, pretext↔scenario matching, the
+`human_impersonation == direct_probe + clause` control, the config gate, and
+engine control-token sync. `tests/test_preview.py` exercises the CLI offline
+(never `--run`). If you hand-edit a template, expect the content-substring
+assertions there to be what breaks — update them deliberately.
+
+`tests/test_evaluation.py` builds mini transcripts by hand (helper
+`make_transcript`) and checks the metric math exactly (explicit/implied/clean/
+overpaid, interval calibration, invalid-extraction ⇒ null accuracy), plus the
+extraction repair ladder against the mock backend: clean parse, repair after
+broken JSON, regex salvage, and unsalvageable ⇒ invalid. Feed deliberately
+broken JSON as canned `MockBackend` replies to exercise the repair path. The
+provider-400 path uses `FlakyJsonBackend` (raises a fake `status_code=400` with a
+`body.error.failed_generation`) — asserts repair and regex-salvage both survive
+it, and that a non-400 error still propagates.
+
+The dashboard evaluate endpoints are tested in `test_server.py`: `Fleet` also
+serves canned extraction/judge JSON for the model names `extractmock`/`judgemock`
+(pass them as `extraction_model`/`judge_model` in the eval body so the run's
+negotiation mocks and the eval mocks don't collide). The `client` fixture points
+`results_path` at tmp so eval runs don't write into the repo's `results/`.
+
 ## State / not-yet-done
 
-- Git repo is initialized but **nothing is committed** (owner commits manually).
-- All four API keys are now in `.env`. Verified live through the dashboard on
-  2026-07-13: `llama-8b`, `gpt-oss-20b`, `claude-sonnet`, `gemini-flash` all
-  complete real conversations. `scripts/live_check.py` (which also probes JSON
-  mode, incl. the Gemini compat endpoint) still hasn't been run — do that next.
-- Not built (by design): negotiation scenarios, leakage/privacy metrics,
-  experiment runners. Don't add these without being asked. The dashboard is a
-  monitoring/ops surface, not an experiment runner — resist growing it into one.
+- One commit exists (`1 - Core Mechanism`); the owner commits manually, so leave
+  committing to them unless asked.
+- All four API keys are in `.env`. Verified live end-to-end (2026-07-16/17):
+  the **dashboard** drives a scenario run (provenance recorded) → **Evaluate**
+  produces a coherent `RunResult` in-page; `preview --run` + `evaluate` CLI also
+  work. During this a real bug surfaced and was fixed: Groq JSON mode 400s on
+  invalid JSON instead of returning it, which crashed extraction — now handled in
+  `jsonparse` (see the provider gotcha above). `scripts/live_check.py` (also
+  probes JSON mode incl. the Gemini compat endpoint) still hasn't been run — do
+  that next.
+- Naming: the owner refers to the project as "leaklab", but the **package stays
+  `src/` with generic names** (confirmed 2026-07-15 when a sprint spec said
+  `leaklab/`). Keep new modules under `src/`; the folder name is separate.
+- Not built (by design): an **experiment runner** that sweeps the
+  (scenario × defense × adversary × model) grid, and aggregation/analysis over
+  the `results/*.jsonl` rows. Don't add these without being asked. The dashboard
+  and preview/evaluate CLIs are single-run tools.
+  - **Explicit preference (2026-07-16):** the owner does *not* want scenarios fed
+    automatically. They want them **preloaded and fired one at a time by hand**
+    (the dashboard's scenario list + ▶). Don't build an auto-batch sweep unless
+    they ask in those words.

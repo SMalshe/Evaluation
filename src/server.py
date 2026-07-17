@@ -30,6 +30,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .engine import Agent, Transcript, Turn, run_conversation
+from .evaluate import EvalConfig, append_result, evaluate_run
+from .metrics import RunResult
 from .models import (
     MissingAPIKeyError,
     ModelClient,
@@ -39,6 +41,15 @@ from .models import (
     load_registry,
 )
 from .persistence import load_transcript, save_transcript
+from .prompts import (
+    SCENARIO_OPENING_PROMPT,
+    AdversaryStrategy,
+    DefenseCondition,
+    PromptConfig,
+    available_adversaries,
+    render_pair,
+)
+from .scenarios import Scenario, ScenarioError, iter_scenarios, load_scenario
 from .smoke import BUYER_SYSTEM, OPENING_PROMPT, SELLER_SYSTEM
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -76,6 +87,45 @@ class Defaults(BaseModel):
     max_turns: int
 
 
+class ScenarioSummary(BaseModel):
+    """A scenario's ground truth, for the researcher-facing UI (agents never see this)."""
+
+    id: str
+    title: str
+    car: str
+    asking_price: int
+    pretext: str
+    reservation_price: int
+    urgency_level: str
+    urgency_reason: str
+    sensitive_label: str
+    sensitive_detail: str
+    budget_flexibility: str
+    floor_price: int
+    inventory_pressure: str
+
+
+class AdversaryOption(BaseModel):
+    value: str
+    gated: bool  # requires enable_authority_verifiable to select
+
+
+class ConditionsView(BaseModel):
+    defenses: list[str]
+    adversaries: list[AdversaryOption]
+
+
+class RenderedPrompts(BaseModel):
+    """Prompts rendered from a scenario + conditions, ready to drop into the run form."""
+
+    buyer_name: str
+    seller_name: str
+    buyer_system: str
+    seller_system: str
+    opening_speaker: str
+    opening_prompt: str
+
+
 class AgentSpec(BaseModel):
     name: str
     model: str  # registry short name
@@ -84,12 +134,30 @@ class AgentSpec(BaseModel):
     max_tokens: int | None = None  # None = registry default
 
 
+class RunConditions(BaseModel):
+    """Provenance for a scenario run, recorded so a saved run is self-describing."""
+
+    scenario_id: str
+    defense: str
+    adversary: str
+
+
 class RunRequest(BaseModel):
     agent_a: AgentSpec
     agent_b: AgentSpec
     max_turns: int = 6
     opening_speaker: str | None = None
     opening_prompt: str = "You may begin."
+    conditions: RunConditions | None = None  # set in scenario mode; None for free-form
+
+
+class EvalRequest(BaseModel):
+    """Optional overrides when evaluating a run from the dashboard."""
+
+    judge_model: str | None = None
+    extraction_model: str | None = None
+    # only needed if the transcript has no recorded conditions (free-form run):
+    conditions: RunConditions | None = None
 
 
 class TurnView(BaseModel):
@@ -142,6 +210,8 @@ class ConversationView(BaseModel):
     opening_prompt: str
     started_at: datetime
     ended_at: datetime | None = None
+    metadata: dict[str, Any] | None = None  # run provenance (scenario id, conditions)
+    evaluation: RunResult | None = None  # populated once the run has been evaluated
 
 
 class HistoryEntry(BaseModel):
@@ -152,6 +222,10 @@ class HistoryEntry(BaseModel):
     termination: str
     deal_amount: str | None
     started_at: datetime
+    scenario_id: str | None = None
+    defense: str | None = None
+    adversary: str | None = None
+    evaluated: bool = False
 
 
 # --- run bookkeeping --------------------------------------------------------
@@ -165,6 +239,7 @@ class RunState:
     request: RunRequest
     agents: list[AgentView]
     started_at: datetime
+    metadata: dict[str, Any] | None = None  # run provenance, passed to run_conversation
     condition: threading.Condition = field(default_factory=threading.Condition)
     cancel: threading.Event = field(default_factory=threading.Event)
     turns: list[TurnView] = field(default_factory=list)
@@ -230,7 +305,7 @@ def _turn_view(turn: Turn, config: ModelConfig) -> TurnView:
     )
 
 
-def _view_of_run(state: RunState) -> ConversationView:
+def _view_of_run(state: RunState, evaluation: RunResult | None = None) -> ConversationView:
     with state.condition:
         turns = list(state.turns)
         transcript = state.transcript
@@ -250,6 +325,8 @@ def _view_of_run(state: RunState) -> ConversationView:
             opening_prompt=state.request.opening_prompt,
             started_at=state.started_at,
             ended_at=state.ended_at,
+            metadata=state.metadata,
+            evaluation=evaluation,
         )
 
 
@@ -257,6 +334,7 @@ def _view_of_transcript(
     transcript: Transcript,
     registry: dict[str, ModelConfig],
     file: str,
+    evaluation: RunResult | None = None,
 ) -> ConversationView:
     infos = {info.name: info for info in transcript.agents}
     turns = [
@@ -303,6 +381,27 @@ def _view_of_transcript(
         opening_prompt=transcript.opening_prompt,
         started_at=transcript.started_at,
         ended_at=transcript.ended_at,
+        metadata=transcript.metadata,
+        evaluation=evaluation,
+    )
+
+
+def _scenario_summary(scenario: Scenario) -> ScenarioSummary:
+    b = scenario.buyer_private
+    return ScenarioSummary(
+        id=scenario.id,
+        title=scenario.title,
+        car=scenario.public.car,
+        asking_price=scenario.public.asking_price,
+        pretext=scenario.pretext.value,
+        reservation_price=b.reservation_price,
+        urgency_level=b.urgency.level.value,
+        urgency_reason=b.urgency.reason,
+        sensitive_label=b.sensitive_context.label.value,
+        sensitive_detail=b.sensitive_context.detail,
+        budget_flexibility=b.budget_flexibility.value,
+        floor_price=scenario.seller_private.floor_price,
+        inventory_pressure=scenario.seller_private.inventory_pressure.value,
     )
 
 
@@ -317,6 +416,8 @@ def create_app(
     registry_path: str | Path = "models.yaml",
     runs_dir: str | Path = "runs",
     client_factory: ClientFactory | None = None,
+    scenarios_dir: str | Path = "scenarios",
+    results_path: str | Path = "results/results.jsonl",
 ) -> FastAPI:
     """Build the dashboard app.
 
@@ -326,18 +427,58 @@ def create_app(
     load_dotenv(override=False)
     registry_path = Path(registry_path)
     runs_dir = Path(runs_dir)
+    scenarios_dir = Path(scenarios_dir)
+    results_path = Path(results_path)
     build_client: ClientFactory = client_factory or (
         lambda name: get_client(name, registry_path=registry_path)
     )
 
     app = FastAPI(title="Conversation dashboard", docs_url="/api/docs")
     app.state.runs = RunStore()
+    app.state.evals = {}  # keyed by run id (live) or transcript filename (saved)
 
     def registry() -> dict[str, ModelConfig]:
         try:
             return load_registry(registry_path)
         except RegistryError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    def _evaluate(transcript: Transcript, req: EvalRequest, cache_key: str) -> RunResult:
+        """Run extraction + judge + metrics for a transcript, cache and persist it."""
+        conditions = req.conditions or (
+            RunConditions(**transcript.metadata) if _has_conditions(transcript.metadata) else None
+        )
+        if conditions is None:
+            raise HTTPException(
+                status_code=400,
+                detail="This run has no recorded scenario/defense/adversary; "
+                "supply them in the request body to evaluate it.",
+            )
+        try:
+            scenario = load_scenario(conditions.scenario_id, scenarios_dir)
+            defense = DefenseCondition(conditions.defense)
+            adversary = AdversaryStrategy(conditions.adversary)
+        except (ScenarioError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        config = EvalConfig(
+            judge_model=req.judge_model or EvalConfig.judge_model,
+            extraction_model=req.extraction_model,
+        )
+        try:
+            result = evaluate_run(
+                transcript,
+                scenario,
+                config,
+                defense=defense,
+                adversary=adversary,
+                client_factory=build_client,
+            )
+        except (RegistryError, MissingAPIKeyError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        append_result(result, results_path)
+        app.state.evals[cache_key] = result
+        return result
 
     @app.get("/api/models", response_model=list[ModelEntry])
     def list_models() -> list[ModelEntry]:
@@ -364,6 +505,58 @@ def create_app(
             agent_b={"name": "seller", "system_prompt": SELLER_SYSTEM},
             opening_prompt=OPENING_PROMPT,
             max_turns=6,
+        )
+
+    @app.get("/api/scenarios", response_model=list[ScenarioSummary])
+    def list_scenarios() -> list[ScenarioSummary]:
+        """Scenario ground truth (researcher-facing; never shown to an agent)."""
+        try:
+            return [_scenario_summary(s) for s in iter_scenarios(scenarios_dir)]
+        except ScenarioError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    @app.get("/api/conditions", response_model=ConditionsView)
+    def conditions() -> ConditionsView:
+        """The buyer defenses and seller adversary strategies the UI can offer."""
+        selectable = set(available_adversaries())  # default config: excludes gated arms
+        return ConditionsView(
+            defenses=[d.value for d in DefenseCondition],
+            adversaries=[
+                AdversaryOption(value=a.value, gated=a not in selectable) for a in AdversaryStrategy
+            ],
+        )
+
+    @app.get("/api/scenarios/{scenario_id}/prompts", response_model=RenderedPrompts)
+    def render_scenario_prompts(
+        scenario_id: str,
+        defense: str = DefenseCondition.none.value,
+        adversary: str = AdversaryStrategy.passive.value,
+        enable_authority_verifiable: bool = False,
+    ) -> RenderedPrompts:
+        """Render both system prompts for a scenario + condition pair."""
+        try:
+            scenario = load_scenario(scenario_id, scenarios_dir)
+        except ScenarioError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        try:
+            defense_condition = DefenseCondition(defense)
+            adversary_strategy = AdversaryStrategy(adversary)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        config = PromptConfig(enable_authority_verifiable=enable_authority_verifiable)
+        try:
+            buyer_system, seller_system = render_pair(
+                scenario, defense_condition, adversary_strategy, config
+            )
+        except ValueError as exc:  # gated adversary not enabled
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return RenderedPrompts(
+            buyer_name="buyer",
+            seller_name="seller",
+            buyer_system=buyer_system,
+            seller_system=seller_system,
+            opening_speaker="buyer",
+            opening_prompt=SCENARIO_OPENING_PROMPT,
         )
 
     @app.post("/api/runs", response_model=ConversationView, status_code=201)
@@ -403,6 +596,7 @@ def create_app(
             request=request,
             agents=[_agent_view(agent) for agent in agents],
             started_at=datetime.now(UTC),
+            metadata=request.conditions.model_dump() if request.conditions else None,
         )
         app.state.runs.add(state)
 
@@ -417,17 +611,29 @@ def create_app(
 
     @app.get("/api/runs", response_model=list[ConversationView])
     def list_runs() -> list[ConversationView]:
-        return [_view_of_run(state) for state in reversed(app.state.runs.all())]
+        return [
+            _view_of_run(state, app.state.evals.get(state.id))
+            for state in reversed(app.state.runs.all())
+        ]
 
     @app.get("/api/runs/{run_id}", response_model=ConversationView)
     def get_run(run_id: str) -> ConversationView:
-        return _view_of_run(_require_run(app, run_id))
+        state = _require_run(app, run_id)
+        return _view_of_run(state, app.state.evals.get(run_id))
 
     @app.post("/api/runs/{run_id}/cancel", response_model=ConversationView)
     def cancel_run(run_id: str) -> ConversationView:
         state = _require_run(app, run_id)
         state.cancel.set()  # takes effect after the in-flight turn returns
-        return _view_of_run(state)
+        return _view_of_run(state, app.state.evals.get(run_id))
+
+    @app.post("/api/runs/{run_id}/evaluate", response_model=ConversationView)
+    def evaluate_live_run(run_id: str, req: EvalRequest) -> ConversationView:
+        state = _require_run(app, run_id)
+        if state.transcript is None:
+            raise HTTPException(status_code=409, detail="Run is not finished yet")
+        _evaluate(state.transcript, req, run_id)
+        return _view_of_run(state, app.state.evals.get(run_id))
 
     @app.get("/api/runs/{run_id}/events")
     def run_events(run_id: str) -> StreamingResponse:
@@ -447,6 +653,7 @@ def create_app(
                 transcript = load_transcript(path)
             except Exception:  # a hand-edited or partial file shouldn't break the list
                 continue
+            meta = transcript.metadata or {}
             entries.append(
                 HistoryEntry(
                     file=path.name,
@@ -456,18 +663,40 @@ def create_app(
                     termination=transcript.termination,
                     deal_amount=transcript.deal_amount,
                     started_at=transcript.started_at,
+                    scenario_id=meta.get("scenario_id"),
+                    defense=meta.get("defense"),
+                    adversary=meta.get("adversary"),
+                    evaluated=path.name in app.state.evals,
                 )
             )
         return entries
 
-    @app.get("/api/history/{file}", response_model=ConversationView)
-    def get_history(file: str) -> ConversationView:
+    def _saved_path(file: str) -> Path:
         if not SAFE_FILENAME.match(file):
             raise HTTPException(status_code=400, detail="Invalid transcript name")
         path = runs_dir / file
         if not path.is_file():
             raise HTTPException(status_code=404, detail=f"No such transcript: {file}")
-        return _view_of_transcript(load_transcript(path), registry(), file)
+        return path
+
+    @app.get("/api/history/{file}", response_model=ConversationView)
+    def get_history(file: str) -> ConversationView:
+        path = _saved_path(file)
+        return _view_of_transcript(
+            load_transcript(path), registry(), file, app.state.evals.get(file)
+        )
+
+    @app.get("/api/history/{file}/raw")
+    def get_history_raw(file: str) -> FileResponse:
+        """The saved transcript JSON verbatim, for auditing."""
+        return FileResponse(_saved_path(file), media_type="application/json")
+
+    @app.post("/api/history/{file}/evaluate", response_model=ConversationView)
+    def evaluate_saved_run(file: str, req: EvalRequest) -> ConversationView:
+        path = _saved_path(file)
+        transcript = load_transcript(path)
+        _evaluate(transcript, req, file)
+        return _view_of_transcript(transcript, registry(), file, app.state.evals.get(file))
 
     @app.get("/")
     def index() -> FileResponse:
@@ -482,6 +711,10 @@ def _require_run(app: FastAPI, run_id: str) -> RunState:
     if state is None:
         raise HTTPException(status_code=404, detail=f"No such run: {run_id}")
     return state
+
+
+def _has_conditions(metadata: dict[str, Any] | None) -> bool:
+    return bool(metadata) and {"scenario_id", "defense", "adversary"} <= set(metadata)
 
 
 def _agent_view(agent: Agent) -> AgentView:
@@ -516,6 +749,7 @@ def _run_worker(state: RunState, agent_a: Agent, agent_b: Agent, runs_dir: Path)
             opening_prompt=state.request.opening_prompt,
             on_turn=on_turn,
             cancelled=state.cancel.is_set,
+            metadata=state.metadata,
         )
     except Exception as exc:  # surface provider/network errors in the UI
         with state.condition:
@@ -572,9 +806,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--registry", default="models.yaml", help="path to the model registry")
     parser.add_argument("--runs-dir", default="runs", help="directory for saved transcripts")
+    parser.add_argument("--scenarios-dir", default="scenarios", help="scenario directory")
+    parser.add_argument(
+        "--results-path", default="results/results.jsonl", help="JSONL for evaluation results"
+    )
     args = parser.parse_args(argv)
 
-    app = create_app(registry_path=args.registry, runs_dir=args.runs_dir)
+    app = create_app(
+        registry_path=args.registry,
+        runs_dir=args.runs_dir,
+        scenarios_dir=args.scenarios_dir,
+        results_path=args.results_path,
+    )
     print(f"dashboard: http://{args.host}:{args.port}")
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     return 0

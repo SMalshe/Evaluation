@@ -11,6 +11,10 @@ const registrySummary = document.getElementById("registry-summary");
 
 const state = {
   models: [],
+  scenarios: [],
+  conditions: null,
+  mode: "scenario", // "scenario" | "freeform"
+  freeformInit: false, // whether the free-form defaults have been loaded once
   view: null, // the ConversationView currently on screen
   stream: null, // active EventSource
   runId: null, // id of the run in flight, if any
@@ -82,6 +86,167 @@ function syncOpeningSpeaker() {
   select.value = names.includes(previous) ? previous : names[0];
 }
 
+// --- scenario mode ----------------------------------------------------------
+
+async function loadScenarios() {
+  state.scenarios = await api("/api/scenarios");
+  const list = document.getElementById("scenario-list");
+  list.innerHTML = "";
+  for (const s of state.scenarios) {
+    const row = document.createElement("div");
+    row.className = "scenario-row";
+    row.dataset.id = s.id;
+    row.innerHTML = `<div>
+        <div class="sc-title"></div>
+        <div class="sc-sub"></div>
+      </div>
+      <button type="button" class="sc-run" title="Run this scenario now">▶</button>`;
+    row.querySelector(".sc-title").textContent = `${s.id} · ${s.title}`;
+    row.querySelector(".sc-sub").textContent =
+      `res $${s.reservation_price} / floor $${s.floor_price} · ${s.sensitive_label} · ${s.pretext}`;
+    row.addEventListener("click", (event) => {
+      if (!event.target.closest(".sc-run")) selectScenario(s.id);
+    });
+    row.querySelector(".sc-run").addEventListener("click", (event) => {
+      event.stopPropagation();
+      runScenario(s.id);
+    });
+    list.append(row);
+  }
+  if (state.scenarios[0]) field("scenario").value = state.scenarios[0].id;
+}
+
+function selectScenario(id) {
+  field("scenario").value = id;
+  return applyScenario();
+}
+
+async function runScenario(id) {
+  if (state.stream) return showError("A run is streaming — wait or cancel it first.");
+  if (state.mode !== "scenario") setMode("scenario");
+  await selectScenario(id); // load this scenario's prompts, then fire
+  await startRun();
+}
+
+async function loadConditions() {
+  state.conditions = await api("/api/conditions");
+  const defenseSel = field("defense");
+  defenseSel.innerHTML = "";
+  for (const d of state.conditions.defenses) {
+    const o = document.createElement("option");
+    o.value = o.textContent = d;
+    defenseSel.append(o);
+  }
+  const advSel = field("adversary");
+  advSel.innerHTML = "";
+  for (const a of state.conditions.adversaries) {
+    const o = document.createElement("option");
+    o.value = a.value;
+    o.textContent = a.gated ? `${a.value} (needs enable)` : a.value;
+    o.dataset.gated = a.gated ? "1" : "";
+    advSel.append(o);
+  }
+  syncGatedAdversaries();
+}
+
+function syncGatedAdversaries() {
+  const enabled = field("enable-av").checked;
+  const advSel = field("adversary");
+  for (const opt of advSel.options) {
+    if (opt.dataset.gated) opt.disabled = !enabled;
+  }
+  if (advSel.selectedOptions[0]?.disabled) advSel.value = "passive";
+}
+
+const escapeHtml = (s) =>
+  String(s).replace(
+    /[&<>"]/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c],
+  );
+
+function renderGroundTruth(summary) {
+  const gt = document.getElementById("ground-truth");
+  if (!summary) {
+    gt.innerHTML = "";
+    return;
+  }
+  const rows = [
+    ["asking", `$${summary.asking_price}`, false],
+    ["buyer reservation", `$${summary.reservation_price}`, true],
+    ["seller floor", `$${summary.floor_price}`, true],
+    ["urgency", summary.urgency_level, false],
+    ["budget", summary.budget_flexibility, false],
+    ["inventory", summary.inventory_pressure, false],
+    ["pretext", summary.pretext, false],
+    ["sensitive", summary.sensitive_label, summary.sensitive_label !== "none"],
+  ];
+  gt.innerHTML = rows
+    .map(
+      ([k, v, secret]) =>
+        `<span class="gt-key">${k}</span>` +
+        `<span class="gt-val ${secret ? "gt-secret" : ""}">${escapeHtml(v)}</span>`,
+    )
+    .join("");
+  if (summary.sensitive_detail) {
+    gt.insertAdjacentHTML(
+      "beforeend",
+      `<span class="gt-full">“${escapeHtml(summary.sensitive_detail)}”</span>`,
+    );
+  }
+}
+
+async function applyScenario() {
+  if (state.mode !== "scenario") return;
+  const id = field("scenario").value;
+  if (!id) return;
+  document.querySelectorAll(".scenario-row").forEach((r) =>
+    r.classList.toggle("active", r.dataset.id === id),
+  );
+  renderGroundTruth(state.scenarios.find((s) => s.id === id));
+  const params = new URLSearchParams({
+    defense: field("defense").value,
+    adversary: field("adversary").value,
+    enable_authority_verifiable: field("enable-av").checked,
+  });
+  try {
+    const p = await api(`/api/scenarios/${encodeURIComponent(id)}/prompts?${params}`);
+    field("a-name").value = p.buyer_name;
+    field("b-name").value = p.seller_name;
+    field("a-system").value = p.buyer_system;
+    field("b-system").value = p.seller_system;
+    field("opening-prompt").value = p.opening_prompt;
+    syncOpeningSpeaker();
+    field("opening-speaker").value = p.opening_speaker;
+    formError.hidden = true;
+  } catch (error) {
+    showError(error.message);
+  }
+}
+
+function setMode(mode, { loadDefaultsIfNeeded = true } = {}) {
+  state.mode = mode;
+  const scenario = mode === "scenario";
+  document.body.classList.toggle("freeform", !scenario);
+  document.getElementById("mode-scenario").classList.toggle("active", scenario);
+  document.getElementById("mode-freeform").classList.toggle("active", !scenario);
+  // In scenario mode the names, opener, and swap are dictated by the scenario.
+  for (const n of ["a-name", "b-name", "opening-prompt", "opening-speaker"]) {
+    field(n).disabled = scenario;
+  }
+  document.querySelectorAll('[data-slot="a"] .slot-role').forEach((e) => {
+    e.textContent = scenario ? "Buyer" : "Agent A";
+  });
+  document.querySelectorAll('[data-slot="b"] .slot-role').forEach((e) => {
+    e.textContent = scenario ? "Seller" : "Agent B";
+  });
+  if (scenario) {
+    applyScenario();
+  } else if (loadDefaultsIfNeeded && !state.freeformInit) {
+    loadDefaults();
+    state.freeformInit = true;
+  }
+}
+
 function requestBody() {
   const agent = (slot) => ({
     name: field(`${slot}-name`).value.trim(),
@@ -94,13 +259,22 @@ function requestBody() {
       ? null
       : Number(field(`${slot}-max-tokens`).value),
   });
-  return {
+  const body = {
     agent_a: agent("a"),
     agent_b: agent("b"),
     max_turns: Number(field("max-turns").value),
     opening_speaker: field("opening-speaker").value,
     opening_prompt: field("opening-prompt").value,
   };
+  if (state.mode === "scenario" && field("scenario").value) {
+    // record provenance so the saved run is self-describing and evaluable later
+    body.conditions = {
+      scenario_id: field("scenario").value,
+      defense: field("defense").value,
+      adversary: field("adversary").value,
+    };
+  }
+  return body;
 }
 
 // --- rendering --------------------------------------------------------------
@@ -191,8 +365,122 @@ function setPending(view) {
   turnsEl.append(pending);
 }
 
+function conditionsOf(view) {
+  const m = view.metadata || {};
+  return m.scenario_id && m.defense && m.adversary ? m : null;
+}
+
+function renderRunMeta(view) {
+  const bar = document.getElementById("run-meta");
+  const cond = conditionsOf(view);
+  const evaluable = cond && view.status !== "running" && view.turns.length > 0;
+  const showRaw = view.source === "saved";
+  if (!cond && !showRaw) {
+    bar.hidden = true;
+    bar.innerHTML = "";
+    return;
+  }
+  bar.hidden = false;
+  const chips = cond
+    ? `<span class="chip">scenario <b>${cond.scenario_id}</b></span>
+       <span class="chip">defense <b>${cond.defense}</b></span>
+       <span class="chip">adversary <b>${cond.adversary}</b></span>`
+    : `<span class="chip">free-form conversation</span>`;
+  const judgeOpts = state.models
+    .map((m) => `<option value="${m.name}"${m.name === "claude-sonnet" ? " selected" : ""}>${m.name}</option>`)
+    .join("");
+  const evalCtl = evaluable
+    ? `<label class="chip">judge <select id="eval-judge">${judgeOpts}</select></label>
+       <button type="button" id="eval-btn" class="primary">${view.evaluation ? "Re-evaluate" : "Evaluate leakage"}</button>`
+    : "";
+  const rawLink = showRaw
+    ? `<a class="linkish" href="/api/history/${encodeURIComponent(view.id)}/raw" target="_blank" rel="noopener">Raw JSON</a>`
+    : "";
+  bar.innerHTML = `${chips}<span class="spacer"></span>${evalCtl}${rawLink}`;
+  document.getElementById("eval-btn")?.addEventListener("click", () => evaluateCurrent(view));
+}
+
+function renderEval(view) {
+  const panel = document.getElementById("eval-panel");
+  const r = view.evaluation;
+  if (!r) {
+    panel.hidden = true;
+    panel.innerHTML = "";
+    return;
+  }
+  panel.hidden = false;
+  const mark = (b) => (b == null ? "—" : b ? `<span class="badge-correct">✓</span>` : `<span class="badge-wrong">✗</span>`);
+  const yesno = (b) => (b == null ? "—" : b ? "yes" : "no");
+  const pct = (x) => (x == null ? "—" : `${x.toFixed(1)}%`);
+  const leak = (t) => (t == null ? "no leak" : `turn ${t + 1}`);
+  const card = (label, rows) =>
+    `<div class="eval-card"><div class="ec-label">${label}</div>${rows
+      .map(([k, v]) => `<div class="ec-row"><span class="k">${k}</span><span>${v}</span></div>`)
+      .join("")}</div>`;
+  panel.innerHTML = `
+    <h3>Leakage evaluation
+      <span class="muted" style="font-weight:400">· extraction ${r.extraction_model} · judge ${r.judge_model}</span>
+    </h3>
+    <div class="eval-grid">
+      ${card("reservation price", [
+        ["truth", `$${r.reservation_true}`],
+        ["adversary guess", r.reservation_est == null ? "—" : `$${r.reservation_est}`],
+        ["error / hit ≤10%", `${pct(r.reservation_abs_pct_error)} ${mark(r.reservation_hit_10pct)}`],
+        ["in 80% interval", mark(r.reservation_in_interval)],
+        ["first disclosed", leak(r.first_leak_turn_reservation)],
+      ])}
+      ${card("urgency", [
+        ["truth", r.urgency_true],
+        ["guess", `${r.urgency_guess ?? "—"} ${mark(r.urgency_correct)}`],
+        ["first disclosed", leak(r.first_leak_turn_urgency)],
+      ])}
+      ${card("sensitive context", [
+        ["truth", r.sensitive_true],
+        ["guess", `${r.sensitive_guess ?? "—"} ${mark(r.sensitive_correct)}`],
+        ["first disclosed", leak(r.first_leak_turn_sensitive)],
+      ])}
+      ${card("outcome", [
+        ["deal", r.deal_reached ? `$${r.final_price}` : r.termination.replace("_", " ")],
+        ["buyer surplus", r.buyer_surplus == null ? "—" : `$${r.buyer_surplus}`],
+        ["overpaid", yesno(r.overpaid)],
+        ["prompt-leak", yesno(r.prompt_leak)],
+      ])}
+    </div>
+    <div class="eval-note">
+      extraction ${r.extraction_valid ? r.extraction_method : "invalid"} ·
+      judge ${r.judge_valid ? "ok" : "invalid"} ·
+      ${r.eval_prompt_tokens + r.eval_completion_tokens} eval tokens ·
+      ${r.eval_s.toFixed(1)}s
+    </div>`;
+}
+
+async function evaluateCurrent(view) {
+  const btn = document.getElementById("eval-btn");
+  const judge = document.getElementById("eval-judge")?.value;
+  btn.disabled = true;
+  btn.textContent = "Evaluating…";
+  try {
+    const base = view.source === "saved" ? "/api/history" : "/api/runs";
+    const updated = await api(`${base}/${encodeURIComponent(view.id)}/evaluate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ judge_model: judge }),
+    });
+    render(updated);
+    loadHistory();
+  } catch (error) {
+    showError(error.message);
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = "Evaluate leakage";
+    }
+  }
+}
+
 function render(view) {
   state.view = view;
+  renderRunMeta(view);
+  renderEval(view);
   renderParticipants(view);
   setStats(view);
   turnsEl.innerHTML = "";
@@ -259,8 +547,7 @@ function showError(message) {
   formError.hidden = false;
 }
 
-form.addEventListener("submit", async (event) => {
-  event.preventDefault();
+async function startRun() {
   formError.hidden = true;
   runButton.disabled = true;
   runButton.textContent = "Starting…";
@@ -281,6 +568,11 @@ form.addEventListener("submit", async (event) => {
     runButton.disabled = false;
     runButton.textContent = "Run conversation";
   }
+}
+
+form.addEventListener("submit", (event) => {
+  event.preventDefault();
+  startRun();
 });
 
 cancelButton.addEventListener("click", async () => {
@@ -310,6 +602,17 @@ for (const name of ["a-name", "b-name"]) {
   field(name).addEventListener("input", syncOpeningSpeaker);
 }
 
+document.getElementById("mode-scenario").addEventListener("click", () => setMode("scenario"));
+document.getElementById("mode-freeform").addEventListener("click", () => setMode("freeform"));
+// scenario is a hidden input set via the list; only the condition selects fire change
+for (const control of ["defense", "adversary"]) {
+  field(control).addEventListener("change", applyScenario);
+}
+field("enable-av").addEventListener("change", () => {
+  syncGatedAdversaries();
+  applyScenario();
+});
+
 // --- history ----------------------------------------------------------------
 
 async function loadHistory() {
@@ -334,8 +637,12 @@ async function loadHistory() {
     button.querySelector(".badge").textContent = entry.deal_amount
       ? `$${entry.deal_amount}`
       : entry.termination.replace("_", " ");
+    const cond = entry.scenario_id
+      ? `${entry.scenario_id}/${entry.defense}/${entry.adversary}`
+      : "free-form";
+    const evalMark = entry.evaluated ? " · ✓ evaluated" : "";
     button.querySelector(".history-sub").textContent =
-      `${entry.models.join(" / ")} · ${entry.turns} turns`;
+      `${cond} · ${entry.models.join(" / ")} · ${entry.turns} turns${evalMark}`;
     button.title = `${entry.file}\n${new Date(entry.started_at).toLocaleString()}`;
     button.addEventListener("click", () => openSaved(entry.file, button));
     item.append(button);
@@ -348,6 +655,9 @@ async function openSaved(file, button) {
   try {
     const view = await api(`/api/history/${encodeURIComponent(file)}`);
     render(view);
+    // A saved transcript's prompts are arbitrary, so show them in free-form.
+    state.freeformInit = true;
+    setMode("freeform", { loadDefaultsIfNeeded: false });
     history.replaceState(null, "", `#run=${encodeURIComponent(file)}`);
     const target = button ?? historyList.querySelector(`button[data-file="${CSS.escape(file)}"]`);
     document.querySelectorAll(".history-list button").forEach((b) =>
@@ -381,8 +691,10 @@ document.getElementById("refresh-history").addEventListener("click", loadHistory
 (async () => {
   try {
     await loadRegistry();
-    await loadDefaults();
+    await loadScenarios();
+    await loadConditions();
     await loadHistory();
+    setMode("scenario"); // fills the prompts from the first scenario
     const file = new URLSearchParams(location.hash.slice(1)).get("run");
     if (file) await openSaved(file, null); // deep link: #run=<transcript file>
   } catch (error) {

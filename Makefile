@@ -9,9 +9,13 @@ PORT ?= 8000
 MODEL_A ?= claude-sonnet
 MODEL_B ?= llama-70b
 MAX_TURNS ?= 6
+SCENARIO ?= s01
+DEFENSE ?= none
+ADVERSARY ?= passive
+TRANSCRIPT ?=
 
 .DEFAULT_GOAL := help
-.PHONY: help install run run-cli ping-models test lint format check clean
+.PHONY: help install run run-cli preview eval ping-models test lint format check clean
 
 help: ## List the available targets
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) \
@@ -26,6 +30,14 @@ run: ## Serve the dashboard at HOST:PORT; spends API credit per conversation
 run-cli: ## One conversation in the terminal (MODEL_A=opener); spends API credit
 	$(RUN) python -m src.smoke --model-a $(MODEL_A) --model-b $(MODEL_B) \
 		--max-turns $(MAX_TURNS)
+
+preview: ## Render a scenario's prompts (SCENARIO=, DEFENSE=, ADVERSARY=); offline
+	$(RUN) python -m src.preview --scenario $(SCENARIO) --defense $(DEFENSE) \
+		--adversary $(ADVERSARY)
+
+eval: ## Evaluate a transcript (TRANSCRIPT=, SCENARIO=, DEFENSE=, ADVERSARY=); spends API credit
+	$(RUN) python -m src.evaluate --transcript $(TRANSCRIPT) --scenario $(SCENARIO) \
+		--defense $(DEFENSE) --adversary $(ADVERSARY)
 
 ping-models: ## Probe every registry entry with one tiny live call; spends API credit
 	$(RUN) python scripts/live_check.py

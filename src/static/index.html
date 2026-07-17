@@ -18,8 +18,38 @@
       <!-- setup -->
       <section class="panel setup" aria-label="Run setup">
         <form id="run-form">
+          <div class="mode-switch" role="tablist">
+            <button type="button" id="mode-scenario" class="mode-btn active" role="tab">Scenario</button>
+            <button type="button" id="mode-freeform" class="mode-btn" role="tab">Free-form</button>
+          </div>
+
+          <fieldset class="agent scenario-panel" id="scenario-panel">
+            <legend>Scenario &amp; conditions</legend>
+            <div class="field-row">
+              <label class="field">
+                <span>Buyer defense</span>
+                <select name="defense"></select>
+              </label>
+              <label class="field">
+                <span>Seller adversary</span>
+                <select name="adversary"></select>
+              </label>
+            </div>
+            <label class="checkline">
+              <input type="checkbox" name="enable-av" />
+              <span>enable <code>authority_verifiable</code> (paired defense arm)</span>
+            </label>
+            <p class="hint">
+              All scenarios below are preloaded. Click a row to load its prompts, or hit
+              <strong>▶</strong> to run it straight away with the models and conditions above.
+            </p>
+            <input type="hidden" name="scenario" />
+            <div class="scenario-list" id="scenario-list" aria-label="Preloaded scenarios"></div>
+            <div class="ground-truth" id="ground-truth" aria-label="Scenario ground truth"></div>
+          </fieldset>
+
           <fieldset class="agent" data-slot="a">
-            <legend><span class="dot dot-a"></span> Agent A</legend>
+            <legend><span class="dot dot-a"></span> <span class="slot-role">Agent A</span></legend>
             <label class="field">
               <span>Name</span>
               <input name="a-name" value="buyer" required autocomplete="off" />
@@ -53,7 +83,7 @@
           </div>
 
           <fieldset class="agent" data-slot="b">
-            <legend><span class="dot dot-b"></span> Agent B</legend>
+            <legend><span class="dot dot-b"></span> <span class="slot-role">Agent B</span></legend>
             <label class="field">
               <span>Name</span>
               <input name="b-name" value="seller" required autocomplete="off" />
@@ -108,6 +138,8 @@
 
       <!-- transcript -->
       <section class="panel stream" aria-label="Transcript">
+        <div class="run-meta" id="run-meta" hidden></div>
+
         <div class="stats" id="stats">
           <div class="tile">
             <span class="tile-label">Status</span>
@@ -135,6 +167,8 @@
             <span class="tile-sub" id="stat-latency-sub">summed latency</span>
           </div>
         </div>
+
+        <div class="eval-panel" id="eval-panel" hidden></div>
 
         <div class="participants" id="participants" hidden></div>
 

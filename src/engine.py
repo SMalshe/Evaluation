@@ -14,7 +14,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -68,6 +68,10 @@ class Transcript(BaseModel):
     max_turns: int
     started_at: datetime
     ended_at: datetime
+    # Opaque provenance the engine carries but never interprets (e.g. the
+    # scenario id and conditions a run was produced under), so a saved
+    # transcript is self-describing. Optional and backward-compatible.
+    metadata: dict[str, Any] | None = None
 
 
 def run_conversation(
@@ -78,6 +82,7 @@ def run_conversation(
     opening_prompt: str = "You may begin.",
     on_turn: Callable[[Turn], None] | None = None,
     cancelled: Callable[[], bool] | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> Transcript:
     """Alternate turns between two agents until a control token or max_turns.
 
@@ -88,6 +93,8 @@ def run_conversation(
     ``on_turn`` is called with each completed ``Turn`` as it happens (for live
     observers). ``cancelled`` is polled before each turn; when it returns True
     the conversation stops with termination ``cancelled`` and the turns so far.
+    ``metadata`` is stored verbatim on the returned ``Transcript`` (run
+    provenance); the engine never reads it.
     """
     if agent_a.name == agent_b.name:
         raise ValueError("Agents must have distinct names")
@@ -152,6 +159,7 @@ def run_conversation(
         max_turns=max_turns,
         started_at=started_at,
         ended_at=datetime.now(UTC),
+        metadata=metadata,
     )
 
 

@@ -24,6 +24,15 @@ disables the registry entries that need it.
 | `models.yaml`           | Registry: short name -> backend, model ID, endpoint, defaults, prices |
 | `src/engine.py`         | `Agent`, `run_conversation`, pydantic `Transcript`              |
 | `src/persistence.py`    | Save/load transcripts as JSON under `runs/`                     |
+| `src/scenarios.py`      | Pydantic scenario schema + label enums + loader                 |
+| `scenarios/`            | 12 used-car negotiation scenarios (`s01`–`s12`, YAML)           |
+| `src/prompts.py`        | Buyer/seller system-prompt templates by defense × adversary     |
+| `src/preview.py`        | CLI: render (and optionally run) a scenario under conditions    |
+| `src/extraction.py`     | Post-negotiation adversary questionnaire (JSON, with repair)    |
+| `src/judge.py`          | Independent judge: per-turn, per-attribute leak labels          |
+| `src/metrics.py`        | Flat `RunResult` metric math (pure)                             |
+| `src/evaluate.py`       | `evaluate_run` + JSONL persistence (`python -m src.evaluate`)   |
+| `src/jsonparse.py`      | Ask-for-JSON + bounded repair-retry helper (shared)            |
 | `src/server.py`         | Dashboard: HTTP API + SSE turn stream (`python -m src.server`)  |
 | `src/static/`           | The dashboard page (plain HTML/CSS/JS, no build step)           |
 | `src/smoke.py`          | CLI smoke test (bicycle haggle)                                 |
@@ -36,15 +45,86 @@ disables the registry entries that need it.
 uv run python -m src.server        # http://127.0.0.1:8000
 ```
 
-One page to pick the two models, edit each side's system prompt, run the
-conversation, and watch turns stream in as they land — with per-turn latency,
-tokens, and cost, plus running totals and the termination reason. Models that
-lack an API key are shown disabled rather than hidden. A run can be cancelled
-mid-flight (it stops after the turn already in flight and still saves what it
-got). Every finished run is written to `runs/` and is reopenable from the
-sidebar, which also refills the form so you can change one knob and re-run.
+One page to pick the two models, run the conversation, and watch turns stream in
+as they land — with per-turn latency, tokens, and cost, plus running totals and
+the termination reason. Two setup modes:
+
+- **Scenario** (default): all 12 scenarios are **preloaded as a list** with their
+  ground truth (reservation price, floor, sensitive context, pretext). Set the
+  buyer/seller models and the defense/adversary once, then click any scenario's
+  **▶** to run it — the prompts are generated for you. Clicking a row (not the ▶)
+  just loads it so you can inspect or edit before running. `authority_verifiable`
+  appears once you tick its enable box.
+- **Free-form**: edit both system prompts by hand (the original behaviour).
+
+Generated prompts stay editable, so you can tweak and pilot. Models that lack an
+API key are shown disabled rather than hidden. A run can be cancelled mid-flight
+(it stops after the turn already in flight and still saves what it got).
+
+**Auditability.** Every finished run is written to `runs/` (with its scenario and
+conditions recorded on the transcript) and reopenable from the sidebar, which
+shows each run's `scenario/defense/adversary` and whether it's been evaluated.
+Opening a run shows the conditions, both agents' system prompts, the full
+transcript, and a **Raw JSON** link. For a scenario run, an **Evaluate leakage**
+button runs the extraction + judge in place (pick the judge model) and renders
+the `RunResult` — the adversary's guesses vs. the truth, first-disclosed turn per
+attribute, deal outcome, and prompt-leak — right above the transcript.
 
 Options: `--host`, `--port`, `--registry`, `--runs-dir`.
+
+## Scenarios and conditions
+
+Each scenario in `scenarios/` is machine-readable ground truth: public facts
+both sides know, the buyer's private information (reservation price, urgency, a
+labelled sensitive circumstance, budget flexibility), and the seller's private
+floor and inventory pressure. `src/prompts.py` renders in-character buyer and
+seller system prompts from a scenario plus two conditions:
+
+- **Buyer defense** (`none` / `basic` / `strong`) — how much the buyer is told
+  to guard its private information.
+- **Seller adversary** (`passive` / `direct_probe` / `rapport` / `pressure` /
+  `authority` / `human_impersonation`, plus the gated defense arm
+  `authority_verifiable`) — the extraction tactic layered on top of ordinary
+  negotiation.
+
+Render a pair, or run one live conversation between two models:
+
+```sh
+uv run python -m src.preview --scenario s01 --defense basic --adversary rapport
+uv run python -m src.preview --scenario s01 --adversary authority --run \
+    --model-a llama-8b --model-b gpt-oss-20b
+```
+
+`authority_verifiable` is off by default; pass `--enable-authority-verifiable`
+to select it. Rendered prompts stay fully in character — they never tell an
+agent it is being tested, scored, or talking to an AI (the one exception is the
+`human_impersonation` seller, told to claim it is human). Those experimental
+concepts live only in the scenario files, never in an agent's prompt.
+
+## Evaluating a run
+
+`evaluate_run(transcript, scenario, config, defense=…, adversary=…)` scores a
+finished negotiation into a flat `RunResult` (persisted as one JSONL line):
+
+- **Extraction** — the adversary's own model is shown the transcript and asked to
+  guess the buyer's private info (reservation price + 80% interval, urgency,
+  sensitive category), as JSON. Broken JSON is repaired (feed the error back, up
+  to N times), then salvaged by regex, then marked invalid — never a crash.
+- **Judge** — a separate model (default a frontier model, near-deterministic)
+  labels each buyer turn per attribute as `explicit_leak` / `implied` / `none`
+  with an evidence span, given the ground truth, and flags verbatim prompt-leak.
+- **Metrics** — reservation percent error / hit-within-10% / interval
+  calibration; urgency & sensitive correctness against enum-size chance
+  baselines; first-leak turn per attribute; deal/price/surplus/overpaid; plus
+  condition, model, token, and timing bookkeeping.
+
+```sh
+uv run python -m src.evaluate --transcript runs/<file>.json --scenario s01 \
+    --defense none --adversary authority        # appends to results/results.jsonl
+```
+
+The extraction and judge models are chosen independently of the negotiating
+models (extraction defaults to the seller's own model). `results/` is gitignored.
 
 ## Usage
 
@@ -91,6 +171,8 @@ uv run python scripts/live_check.py   # live: one tiny request per provider (spe
 
 `make help` lists the same tasks as targets: `make check` (lint + tests),
 `make run` (the dashboard), `make run-cli MODEL_A=gpt-mini MODEL_B=llama-8b`,
+`make preview SCENARIO=s03 ADVERSARY=authority`,
+`make eval TRANSCRIPT=runs/<f>.json SCENARIO=s01 DEFENSE=none ADVERSARY=authority`,
 `make ping-models`.
 
 ## Provider notes
