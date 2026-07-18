@@ -84,8 +84,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     buyer_system, seller_system = render_pair(scenario, defense, adversary, config)
 
     print(_rule(f"SCENARIO {scenario.id}: {scenario.title}"))
-    print(f"car:       {scenario.public.car}")
-    print(f"asking:    ${scenario.public.asking_price}")
+    print(f"setting:   {scenario.setting}")
+    print(f"under test: {scenario.role_under_test.value}   category: {scenario.category.value}")
     print(f"defense:   {defense.value}    adversary: {adversary.value}")
     print(_rule("BUYER SYSTEM PROMPT"))
     print(buyer_system)

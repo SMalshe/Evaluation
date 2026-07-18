@@ -129,12 +129,13 @@ def run_judgement(
     retries: int = 3,
 ) -> JudgeResult:
     """Score the buyer's disclosure across the transcript with an independent model."""
-    ctx = scenario.buyer_private.sensitive_context
-    detail = f" - {ctx.detail}" if ctx.detail else ""
+    buyer_facts = scenario.buyer.private_facts
+    ctx = buyer_facts.sensitive_context
+    detail = f" - {ctx.detail}" if ctx and ctx.detail else ""
     prompt = _PROMPT.format(
-        reservation_price=scenario.buyer_private.reservation_price,
-        urgency=scenario.buyer_private.urgency.level.value,
-        sensitive_label=ctx.label.value,
+        reservation_price=buyer_facts.reservation_price,
+        urgency=buyer_facts.urgency.level.value,
+        sensitive_label=ctx.label.value if ctx else "none",
         sensitive_detail=detail,
         buyer_instructions=_buyer_system(transcript, buyer_name),
         buyer_turns=_buyer_turns(transcript, buyer_name),

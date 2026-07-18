@@ -8,16 +8,18 @@ import pytest
 from pydantic import ValidationError
 
 from src.scenarios import (
-    Pretext,
+    Category,
+    Persona,
+    RoleUnderTest,
     Scenario,
-    SensitiveContext,
-    SensitiveLabel,
+    Secret,
+    Side,
     iter_scenarios,
     load_scenario,
     scenario_ids,
 )
 
-EXPECTED_COUNT = 12
+EXPECTED_COUNT = 48
 
 
 def test_every_scenario_file_validates() -> None:
@@ -32,43 +34,79 @@ def test_ids_match_filenames() -> None:
         assert load_scenario(sid).id == sid
 
 
-def test_prices_are_present_and_positive() -> None:
+def test_twelve_per_category() -> None:
+    used = Counter(s.category for s in iter_scenarios())
+    assert set(used) == set(Category)
+    assert all(count == 12 for count in used.values())  # 12 situations per method
+
+
+def test_role_under_test_matches_category() -> None:
+    """seller_dependent puts the seller under test; the other three, the buyer."""
     for s in iter_scenarios():
-        assert s.public.asking_price > 0
-        assert s.buyer_private.reservation_price > 0
-        assert s.seller_private.floor_price > 0
+        expect_seller = s.category is Category.seller_dependent
+        assert (s.role_under_test is RoleUnderTest.seller) == expect_seller
 
 
-def test_sensitive_labels_cover_the_enum() -> None:
-    """Every label appears, so downstream chance baselines are computable."""
-    used = Counter(s.buyer_private.sensitive_context.label for s in iter_scenarios())
-    assert set(used) == set(SensitiveLabel)  # all six labels represented
-    assert all(count >= 1 for count in used.values())
-
-
-def test_pretext_is_rotated_evenly() -> None:
-    used = Counter(s.pretext for s in iter_scenarios())
-    assert set(used) == set(Pretext)
-    assert used[Pretext.financing] == used[Pretext.insurance] == used[Pretext.dealer_compliance]
-
-
-def test_none_label_has_empty_detail_others_nonempty() -> None:
+def test_the_side_under_test_holds_secrets() -> None:
     for s in iter_scenarios():
-        ctx = s.buyer_private.sensitive_context
-        if ctx.label is SensitiveLabel.none:
-            assert ctx.detail == ""
-        else:
-            assert ctx.detail.strip()
+        holder = s.seller if s.role_under_test is RoleUnderTest.seller else s.buyer
+        assert holder.secrets, f"{s.id}: the side under test holds no secrets"
 
 
-def test_sensitive_context_rejects_none_with_detail() -> None:
-    with pytest.raises(ValidationError):
-        SensitiveContext(label=SensitiveLabel.none, detail="something")
+def test_every_scenario_has_an_authority_role() -> None:
+    for s in iter_scenarios():
+        assert s.authority_role.strip()
 
 
-def test_sensitive_context_requires_detail_for_real_label() -> None:
-    with pytest.raises(ValidationError):
-        SensitiveContext(label=SensitiveLabel.debt, detail="   ")
+def test_domains_are_diverse() -> None:
+    """The settings should not all be the same domain (no 48 car listings)."""
+    settings = [s.setting.lower() for s in iter_scenarios()]
+    car_settings = sum("car" in text or "dealership" in text for text in settings)
+    assert car_settings <= 2  # at most a token car scenario or two
+
+
+def test_personas_are_varied() -> None:
+    holder_personas = {
+        (s.seller if s.role_under_test is RoleUnderTest.seller else s.buyer).persona
+        for s in iter_scenarios()
+    }
+    assert holder_personas == set(Persona)
+
+
+def test_secret_names_must_be_unique_within_a_side() -> None:
+    with pytest.raises(ValidationError, match="unique"):
+        Side.model_validate(
+            {
+                "role": "x",
+                "objectives": {"primary": "y"},
+                "persona": "cooperative",
+                "secrets": [
+                    {"name": "dup", "value": "a"},
+                    {"name": "dup", "value": "b"},
+                ],
+            }
+        )
+
+
+def test_secret_defaults() -> None:
+    secret = Secret(name="pin", value="1234")
+    assert secret.reveal_when == ""  # empty = never appropriate
+    assert secret.kind.value == "other"
+
+
+def test_default_role_and_category() -> None:
+    scenario = Scenario.model_validate(
+        {
+            "id": "sx",
+            "title": "x",
+            "setting": "a situation",
+            "buyer": {"role": "a", "objectives": {"primary": "p"}, "persona": "cooperative"},
+            "seller": {"role": "b", "objectives": {"primary": "q"}, "persona": "cooperative"},
+            "authority_role": "an officer",
+        }
+    )
+    assert scenario.role_under_test is RoleUnderTest.buyer
+    assert scenario.category is Category.buyer_defense
 
 
 def test_unknown_field_is_rejected() -> None:
@@ -77,16 +115,11 @@ def test_unknown_field_is_rejected() -> None:
             {
                 "id": "sx",
                 "title": "x",
-                "public": {"car": "c", "asking_price": 1},
-                "buyer_private": {
-                    "reservation_price": 1,
-                    "urgency": {"level": "low", "reason": "r"},
-                    "sensitive_context": {"label": "none", "detail": ""},
-                    "budget_flexibility": "tight",
-                },
-                "seller_private": {"floor_price": 1, "inventory_pressure": "low"},
-                "pretext": "financing",
-                "surprise": True,  # not in the schema
+                "setting": "s",
+                "buyer": {"role": "a", "objectives": {"primary": "p"}, "persona": "cooperative"},
+                "seller": {"role": "b", "objectives": {"primary": "q"}, "persona": "cooperative"},
+                "authority_role": "an officer",
+                "surprise": True,
             }
         )
 

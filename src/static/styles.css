@@ -217,10 +217,27 @@ body:not(.freeform) .swap-row {
 .scenario-list {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  max-height: 320px;
+  gap: 6px;
+  max-height: 360px;
   overflow-y: auto;
   margin: 8px 0;
+}
+
+.scenario-group {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.scenario-group > summary {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--ink-2);
+  cursor: pointer;
+  padding: 4px 2px;
+  list-style: revert;
 }
 
 .scenario-row {

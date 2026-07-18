@@ -88,30 +88,58 @@ function syncOpeningSpeaker() {
 
 // --- scenario mode ----------------------------------------------------------
 
+// The four experimental-method categories, in menu order.
+const CATEGORY_ORDER = ["buyer_defense", "seller_attack", "authority", "seller_dependent"];
+const CATEGORY_LABELS = {
+  buyer_defense: "Changing the buyer's defense level",
+  seller_attack: "Changing the seller's attack strategy",
+  authority: "One agent pretends to have authority",
+  seller_dependent: "Setting the seller to be the dependent",
+};
+
+function scenarioRow(s) {
+  const row = document.createElement("div");
+  row.className = "scenario-row";
+  row.dataset.id = s.id;
+  row.innerHTML = `<div>
+      <div class="sc-title"></div>
+      <div class="sc-sub"></div>
+    </div>
+    <button type="button" class="sc-run" title="Run this scenario now">▶</button>`;
+  row.querySelector(".sc-title").textContent = `${s.id} · ${s.title}`;
+  const holderRole = s.role_under_test === "seller" ? s.seller_role : s.buyer_role;
+  row.querySelector(".sc-sub").textContent = `${s.role_under_test} under test · ${holderRole}`;
+  row.addEventListener("click", (event) => {
+    if (!event.target.closest(".sc-run")) selectScenario(s.id);
+  });
+  row.querySelector(".sc-run").addEventListener("click", (event) => {
+    event.stopPropagation();
+    runScenario(s.id);
+  });
+  return row;
+}
+
 async function loadScenarios() {
   state.scenarios = await api("/api/scenarios");
   const list = document.getElementById("scenario-list");
   list.innerHTML = "";
+  const byCategory = new Map(CATEGORY_ORDER.map((c) => [c, []]));
   for (const s of state.scenarios) {
-    const row = document.createElement("div");
-    row.className = "scenario-row";
-    row.dataset.id = s.id;
-    row.innerHTML = `<div>
-        <div class="sc-title"></div>
-        <div class="sc-sub"></div>
-      </div>
-      <button type="button" class="sc-run" title="Run this scenario now">▶</button>`;
-    row.querySelector(".sc-title").textContent = `${s.id} · ${s.title}`;
-    row.querySelector(".sc-sub").textContent =
-      `res $${s.reservation_price} / floor $${s.floor_price} · ${s.sensitive_label} · ${s.pretext}`;
-    row.addEventListener("click", (event) => {
-      if (!event.target.closest(".sc-run")) selectScenario(s.id);
-    });
-    row.querySelector(".sc-run").addEventListener("click", (event) => {
-      event.stopPropagation();
-      runScenario(s.id);
-    });
-    list.append(row);
+    if (!byCategory.has(s.category)) byCategory.set(s.category, []);
+    byCategory.get(s.category).push(s);
+  }
+  let first = true;
+  for (const [category, scenarios] of byCategory) {
+    if (!scenarios.length) continue;
+    const group = document.createElement("details");
+    group.className = "scenario-group";
+    group.open = first; // open the first category, collapse the rest
+    first = false;
+    const summary = document.createElement("summary");
+    summary.textContent = `${CATEGORY_LABELS[category] ?? category} (${scenarios.length})`;
+    group.append(summary);
+    for (const s of scenarios) group.append(scenarioRow(s));
+    list.append(group);
   }
   if (state.scenarios[0]) field("scenario").value = state.scenarios[0].id;
 }
@@ -171,26 +199,27 @@ function renderGroundTruth(summary) {
     return;
   }
   const rows = [
-    ["asking", `$${summary.asking_price}`, false],
-    ["buyer reservation", `$${summary.reservation_price}`, true],
-    ["seller floor", `$${summary.floor_price}`, true],
-    ["urgency", summary.urgency_level, false],
-    ["budget", summary.budget_flexibility, false],
-    ["inventory", summary.inventory_pressure, false],
-    ["pretext", summary.pretext, false],
-    ["sensitive", summary.sensitive_label, summary.sensitive_label !== "none"],
+    ["under test", summary.role_under_test, false],
+    ["category", summary.category.replace(/_/g, " "), false],
+    ["buyer", `${summary.buyer_role} · ${summary.buyer_persona}`, false],
+    ["seller", `${summary.seller_role} · ${summary.seller_persona}`, false],
+    ["authority role", summary.authority_role, false],
   ];
   gt.innerHTML = rows
     .map(
-      ([k, v, secret]) =>
-        `<span class="gt-key">${k}</span>` +
-        `<span class="gt-val ${secret ? "gt-secret" : ""}">${escapeHtml(v)}</span>`,
+      ([k, v]) =>
+        `<span class="gt-key">${k}</span><span class="gt-val">${escapeHtml(v)}</span>`,
     )
     .join("");
-  if (summary.sensitive_detail) {
+  gt.insertAdjacentHTML("beforeend", `<span class="gt-full">${escapeHtml(summary.setting)}</span>`);
+  // the holder's secrets are the ground truth for what should stay hidden
+  const holderSecrets =
+    summary.role_under_test === "seller" ? summary.seller_secrets : summary.buyer_secrets;
+  for (const secret of holderSecrets) {
+    const when = secret.reveal_when ? ` (reveal only ${secret.reveal_when})` : " (never reveal)";
     gt.insertAdjacentHTML(
       "beforeend",
-      `<span class="gt-full">“${escapeHtml(summary.sensitive_detail)}”</span>`,
+      `<span class="gt-full gt-secret">🔒 ${escapeHtml(secret.value)}${escapeHtml(when)}</span>`,
     );
   }
 }

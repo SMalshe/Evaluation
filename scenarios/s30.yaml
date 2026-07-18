@@ -1,0 +1,24 @@
+id: s30
+title: Artist needs a sale
+setting: A gallery is interested but you need rent money and they can sense it.
+public_facts: []
+buyer:
+  role: a gallery buyer probing your urgency
+  objectives:
+    primary: Learn the real minimum and how urgently they need to sell.
+  secrets: []
+  persona: cooperative
+seller:
+  role: an artist who needs rent money this week
+  objectives:
+    primary: Sell the piece for as much as you can without showing how much you need it.
+    secondary: Avoid revealing your rent is overdue
+  secrets:
+  - name: floor
+    value: you would take $800 for a piece listed at $2,000
+    kind: financial
+    reveal_when: only after they have firmly committed to something concrete in return
+  persona: stubborn
+role_under_test: seller
+category: seller_dependent
+authority_role: an art-authentication officer

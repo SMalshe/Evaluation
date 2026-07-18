@@ -109,17 +109,36 @@ scenario id + conditions there so a saved run is self-describing and evaluable).
 round-trips it via pydantic. `runs/` is gitignored.
 
 **Scenario layer (`src/scenarios.py` + `scenarios/*.yaml`).**
-A `Scenario` is machine-readable ground truth: `public` (car, asking_price,
-shared_facts), `buyer_private` (reservation_price, urgency{level,reason},
-sensitive_context{label,detail}, budget_flexibility), `seller_private`
-(floor_price, inventory_pressure), and a `pretext`. All controlled vocabularies
-are `StrEnum`s **in this one module** (`SensitiveLabel`, `Urgency`,
-`BudgetFlexibility`, `PressureLevel`, `Pretext`) so chance baselines stay
-computable later. Models use `extra="forbid"`; `sensitive_context` enforces
-detail-empty-iff-`none`. 12 scenarios: each `SensitiveLabel` appears twice, and
-`pretext` is rotated evenly (4 financing / 4 insurance / 4 dealer_compliance) so
-a finding can't be an artifact of one pretext. `load_scenario(id)` /
-`iter_scenarios()` load and validate by filename stem.
+Scenarios are **generic information-extraction** interactions (NOT literally car
+sales): one agent **holds** private info, the other **seeks** it. Domains are
+diverse — social engineering, journalism-style probing, HR/medical intake,
+support-desk impersonation, a desperate candidate/founder over-sharing, etc. A
+`Scenario` has a `setting` (the situation), `public_facts`, a `buyer` and
+`seller` each of type `Side`, a `role_under_test` (whose disclosure to score,
+read by the evaluator not the engine), a `category`, and an `authority_role` (the
+role a seeker may falsely claim in the authority arm). A `Side` = `role` (who
+they are, in-world) + `objectives` + `secrets` (list of `Secret{name, value,
+kind, reveal_when}`) + `persona` (cooperative/stubborn/evasive). Each secret's
+`reveal_when` is the in-world condition under which sharing it is strategically
+correct (ground truth for appropriate vs inappropriate disclosure; empty = never)
+— and because every secret carries one, an agent is never told a blanket "reveal
+nothing." Enums (`Persona`, `RoleUnderTest`, `Category`, `SecretKind`) live in
+this module; `extra="forbid"` everywhere.
+
+**48 scenarios** (`s01`–`s48`), **12 per category** = the owner's four
+experimental methods: `buyer_defense` / `seller_attack` / `authority` (buyer is
+the holder) and `seller_dependent` (seller is the holder, desperate). Two of the
+four (`seller_attack`, `authority`) are really *run conditions* (the adversary
+dropdown), so category is an organizational/UI label, not a hard trait — the
+owner accepted that.
+
+**Legacy price fields.** `Side.private_facts` (optional `reservation_price`/
+`urgency`/`sensitive_context`/`floor_price`/`must_sell_reason`) is retained
+**only for the still-price-based evaluator**; the 48 generic scenarios leave it
+`None`. The evaluator therefore declines them (the dashboard eval endpoint 400s
+with "no price-based ground truth"); a generic secret-based scorer is the
+outstanding sprint-3 rework. Eval tests build an inline price scenario
+(`price_scenario()` in `test_evaluation.py`), decoupled from the corpus.
 
 **Prompt layer (`src/prompts.py`).**
 `render_buyer_system(scenario, defense, adversary=None)` and
@@ -144,6 +163,13 @@ returns both and enforces the config gate. Conditions:
   shown `[DEAL $X]` example must satisfy `engine.DEAL_PATTERN` (a test checks).
 Only the buyer prompt ever changes with `adversary` (for `authority_verifiable`);
 otherwise buyer depends on (scenario, defense), seller on (scenario, adversary).
+
+Both sides render **symmetrically** from their `Side`: objectives, private facts,
+`persona` line, and a **disclosure block** built from `disclosure_map` ("You may
+reveal <fact> <condition>."). Per the spec, the disclosure block means an agent is
+never told a blanket "reveal nothing" — that would make the disclosure_map
+untestable. All of it stays in-character (immersion invariant still enforced
+across the full scenario×defense×adversary grid in `test_prompts.py`).
 
 **Preview CLI (`src/preview.py`).**
 `python -m src.preview --scenario s01 --defense basic --adversary rapport`
@@ -183,6 +209,14 @@ record them, so the caller must supply what it ran. Pieces:
   non-`none` for that attribute. When extraction is invalid, accuracy fields are
   `None` (not 0). `EvalConfig` picks extraction/judge models independently;
   `extraction_model=None` ⇒ the seller's own model. `results/` is gitignored.
+
+**Evaluator is still buyer-scoring** (reservation/urgency/sensitive), reading the
+new schema via `scenario.buyer.private_facts.*`. It records `role_under_test` on
+the `RunResult` but does **not** yet honor it (a seller/both scenario is still
+scored as if the buyer were under test). Making the evaluator symmetric —
+scoring the `role_under_test` side against its `disclosure_map` (appropriate vs
+inappropriate disclosure) — is the deferred "sprint 3" rework; don't assume it's
+done.
 
 **Dashboard (`src/server.py` + `src/static/`).**
 `create_app(registry_path, runs_dir, client_factory, scenarios_dir)` returns a
@@ -363,8 +397,10 @@ Close the gate to make "a turn is in flight" a waitable state. Note `TestClient`
 **buffers** streaming responses, so the thread reading an SSE stream cannot also
 release the gate; hand that to a timer (see the live-stream test).
 
-`tests/test_scenarios.py` validates all 12 files, the label/pretext
-distributions, and the `sensitive_context` none-detail rule. `tests/test_prompts.py`
+`tests/test_scenarios.py` validates all 12 files, the four-role-type split
+(8 buyer / 2 seller / 2 both), persona/pretext coverage, that seller-secret
+scenarios carry a `must_sell_reason`, the `disclosure_map`-keys-are-real-facts
+rule, and the none-detail rule for both sensitive fields. `tests/test_prompts.py`
 renders the **full (scenario × defense × adversary) grid** and asserts the
 immersion invariants (no experimental-frame terms in any prompt; the buyer never
 learns the counterpart's nature; only `human_impersonation` claims humanity),
@@ -405,6 +441,12 @@ negotiation mocks and the eval mocks don't collide). The `client` fixture points
 - Naming: the owner refers to the project as "leaklab", but the **package stays
   `src/` with generic names** (confirmed 2026-07-15 when a sprint spec said
   `leaklab/`). Keep new modules under `src/`; the folder name is separate.
+- **Symmetric scenario schema landed (2026-07-18):** scenarios now have
+  buyer/seller `Side`s (objectives/private_facts/disclosure_map/persona) +
+  `role_under_test`. The prompt layer renders both sides symmetrically. The
+  **evaluator was NOT reworked** — it still scores the buyer's
+  reservation/urgency/sensitive regardless of `role_under_test`. The symmetric,
+  disclosure_map-based scorer is the outstanding "sprint 3" piece.
 - Not built (by design): an **experiment runner** that sweeps the
   (scenario × defense × adversary × model) grid, and aggregation/analysis over
   the `results/*.jsonl` rows. Don't add these without being asked. The dashboard

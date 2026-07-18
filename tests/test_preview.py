@@ -17,7 +17,17 @@ def test_prints_both_prompts(capsys: pytest.CaptureFixture[str]) -> None:
     assert "BUYER SYSTEM PROMPT" in out
     assert "SELLER SYSTEM PROMPT" in out
     assert "SCENARIO s01" in out
+    assert "under test: buyer" in out
     assert "rapport" in out  # the adversary tactic is rendered into the seller prompt
+
+
+def test_covers_seller_under_test(capsys: pytest.CaptureFixture[str]) -> None:
+    from src.scenarios import RoleUnderTest, iter_scenarios
+
+    seller_id = next(s.id for s in iter_scenarios() if s.role_under_test is RoleUnderTest.seller)
+    out = run(["--scenario", seller_id, "--adversary", "passive"], capsys)
+    assert "under test: seller" in out
+    assert "Share each item only under its noted condition" in out  # seller holds secrets
 
 
 def test_authority_verifiable_is_gated(capsys: pytest.CaptureFixture[str]) -> None:

@@ -189,12 +189,19 @@ def test_defaults_prefill_the_form(client: TestClient) -> None:
 
 def test_scenarios_endpoint_exposes_ground_truth(client: TestClient) -> None:
     scenarios = client.get("/api/scenarios").json()
-    assert len(scenarios) == 12
+    assert len(scenarios) == 48
+    assert {s["category"] for s in scenarios} == {
+        "buyer_defense",
+        "seller_attack",
+        "authority",
+        "seller_dependent",
+    }
     s01 = next(s for s in scenarios if s["id"] == "s01")
-    assert s01["reservation_price"] > 0
-    assert s01["floor_price"] > 0
-    assert s01["pretext"] in {"financing", "insurance", "dealer_compliance"}
-    assert s01["sensitive_label"]
+    assert s01["buyer_role"] and s01["seller_role"]
+    assert s01["setting"] and s01["authority_role"]
+    assert s01["role_under_test"] in {"buyer", "seller", "both"}
+    holder = s01["seller_secrets"] if s01["role_under_test"] == "seller" else s01["buyer_secrets"]
+    assert holder and holder[0]["value"]  # the side under test holds secrets
 
 
 def test_conditions_endpoint_flags_the_gated_arm(client: TestClient) -> None:
@@ -210,7 +217,7 @@ def test_render_prompts_endpoint(client: TestClient) -> None:
     ok = client.get("/api/scenarios/s01/prompts?defense=basic&adversary=authority").json()
     assert ok["buyer_name"] == "buyer" and ok["seller_name"] == "seller"
     assert ok["opening_speaker"] == "buyer"
-    assert "financing officer" in ok["seller_system"]  # s01 pretext is financing
+    assert "Present yourself to the other person as" in ok["seller_system"]  # authority arm
     assert "to yourself" in ok["buyer_system"]  # basic defense
 
     # gated arm needs the flag
@@ -371,28 +378,19 @@ def test_scenario_run_records_condition_provenance(client: TestClient) -> None:
     assert view["metadata"] == SCENARIO_CONDITIONS
 
 
-def test_evaluate_live_then_saved_run(client: TestClient) -> None:
+def test_generic_scenario_is_not_price_evaluable(client: TestClient) -> None:
+    # The corpus is generic info-extraction (no price ground truth), so the
+    # current price-based evaluator declines it with a clear 400. (The price
+    # evaluator itself is covered directly in test_evaluation.py.)
     run_id = start(client, conditions=SCENARIO_CONDITIONS)["id"]
     wait_for_finish(client, run_id)
-
     body = {"extraction_model": "extractmock", "judge_model": "judgemock"}
-    view = client.post(f"/api/runs/{run_id}/evaluate", json=body).json()
-    ev = view["evaluation"]
-    assert ev is not None
-    assert ev["extraction_valid"] and ev["judge_valid"]
-    assert ev["reservation_true"] == 14500 and ev["reservation_hit_10pct"] is True
-    assert ev["urgency_correct"] is True and ev["sensitive_correct"] is True
-    assert ev["first_leak_turn_sensitive"] == 0
-    assert ev["extraction_model"] == "extractmock" and ev["judge_model"] == "judgemock"
+    resp = client.post(f"/api/runs/{run_id}/evaluate", json=body)
+    assert resp.status_code == 400
+    assert "ground truth" in resp.json()["detail"].lower()
 
-    # re-fetching the run keeps the cached evaluation
-    assert client.get(f"/api/runs/{run_id}").json()["evaluation"] is not None
-
-    # evaluate the saved copy via the history endpoint; history flips to evaluated
     file = client.get("/api/history").json()[0]["file"]
-    saved = client.post(f"/api/history/{file}/evaluate", json=body).json()
-    assert saved["evaluation"]["reservation_hit_10pct"] is True
-    assert client.get("/api/history").json()[0]["evaluated"] is True
+    assert client.post(f"/api/history/{file}/evaluate", json=body).status_code == 400
 
 
 def test_evaluate_without_conditions_is_rejected(client: TestClient) -> None:
@@ -401,15 +399,6 @@ def test_evaluate_without_conditions_is_rejected(client: TestClient) -> None:
     resp = client.post(f"/api/runs/{run_id}/evaluate", json={"judge_model": "judgemock"})
     assert resp.status_code == 400
     assert "scenario" in resp.json()["detail"].lower()
-
-    # ...unless the caller supplies the conditions in the body
-    body = {
-        "extraction_model": "extractmock",
-        "judge_model": "judgemock",
-        "conditions": SCENARIO_CONDITIONS,
-    }
-    ok = client.post(f"/api/runs/{run_id}/evaluate", json=body)
-    assert ok.status_code == 200 and ok.json()["evaluation"] is not None
 
 
 def test_evaluate_before_finish_is_conflict(client: TestClient, fleet: Fleet) -> None:

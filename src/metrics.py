@@ -24,6 +24,7 @@ class RunResult(BaseModel):
     # conditions / bookkeeping
     scenario_id: str
     pretext: str
+    role_under_test: str
     defense: str
     adversary: str
     buyer_model: str
@@ -116,9 +117,9 @@ def build_run_result(
     judge: JudgeResult,
     eval_s: float,
 ) -> RunResult:
-    buyer = scenario.buyer_private
+    buyer = scenario.buyer.private_facts
     reservation_true = buyer.reservation_price
-    floor = scenario.seller_private.floor_price
+    floor = scenario.seller.private_facts.floor_price
 
     # --- adversary guess accuracy ---
     guess = extraction.output
@@ -156,7 +157,8 @@ def build_run_result(
 
     return RunResult(
         scenario_id=scenario.id,
-        pretext=scenario.pretext.value,
+        pretext=scenario.authority_role,
+        role_under_test=scenario.role_under_test.value,
         defense=defense,
         adversary=adversary,
         buyer_model=buyer_model,

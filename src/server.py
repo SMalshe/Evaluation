@@ -87,22 +87,30 @@ class Defaults(BaseModel):
     max_turns: int
 
 
+class SecretView(BaseModel):
+    name: str
+    value: str
+    kind: str
+    reveal_when: str
+
+
 class ScenarioSummary(BaseModel):
     """A scenario's ground truth, for the researcher-facing UI (agents never see this)."""
 
     id: str
     title: str
-    car: str
-    asking_price: int
-    pretext: str
-    reservation_price: int
-    urgency_level: str
-    urgency_reason: str
-    sensitive_label: str
-    sensitive_detail: str
-    budget_flexibility: str
-    floor_price: int
-    inventory_pressure: str
+    setting: str
+    category: str
+    role_under_test: str
+    authority_role: str
+    buyer_role: str
+    buyer_persona: str
+    buyer_objective: str
+    buyer_secrets: list[SecretView]
+    seller_role: str
+    seller_persona: str
+    seller_objective: str
+    seller_secrets: list[SecretView]
 
 
 class AdversaryOption(BaseModel):
@@ -386,22 +394,29 @@ def _view_of_transcript(
     )
 
 
+def _secret_views(side: Any) -> list[SecretView]:
+    return [
+        SecretView(name=s.name, value=s.value, kind=s.kind.value, reveal_when=s.reveal_when)
+        for s in side.secrets
+    ]
+
+
 def _scenario_summary(scenario: Scenario) -> ScenarioSummary:
-    b = scenario.buyer_private
     return ScenarioSummary(
         id=scenario.id,
         title=scenario.title,
-        car=scenario.public.car,
-        asking_price=scenario.public.asking_price,
-        pretext=scenario.pretext.value,
-        reservation_price=b.reservation_price,
-        urgency_level=b.urgency.level.value,
-        urgency_reason=b.urgency.reason,
-        sensitive_label=b.sensitive_context.label.value,
-        sensitive_detail=b.sensitive_context.detail,
-        budget_flexibility=b.budget_flexibility.value,
-        floor_price=scenario.seller_private.floor_price,
-        inventory_pressure=scenario.seller_private.inventory_pressure.value,
+        setting=scenario.setting,
+        category=scenario.category.value,
+        role_under_test=scenario.role_under_test.value,
+        authority_role=scenario.authority_role,
+        buyer_role=scenario.buyer.role,
+        buyer_persona=scenario.buyer.persona.value,
+        buyer_objective=scenario.buyer.objectives.primary,
+        buyer_secrets=_secret_views(scenario.buyer),
+        seller_role=scenario.seller.role,
+        seller_persona=scenario.seller.persona.value,
+        seller_objective=scenario.seller.objectives.primary,
+        seller_secrets=_secret_views(scenario.seller),
     )
 
 
@@ -460,6 +475,14 @@ def create_app(
             adversary = AdversaryStrategy(conditions.adversary)
         except (ScenarioError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if scenario.buyer.private_facts is None:
+            # The current evaluator scores price ground truth; the generic
+            # info-extraction scenarios don't carry it yet (sprint-3 rework).
+            raise HTTPException(
+                status_code=400,
+                detail="This scenario has no price-based ground truth; generic "
+                "disclosure scoring is not implemented yet.",
+            )
 
         config = EvalConfig(
             judge_model=req.judge_model or EvalConfig.judge_model,

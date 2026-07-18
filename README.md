@@ -24,8 +24,8 @@ disables the registry entries that need it.
 | `models.yaml`           | Registry: short name -> backend, model ID, endpoint, defaults, prices |
 | `src/engine.py`         | `Agent`, `run_conversation`, pydantic `Transcript`              |
 | `src/persistence.py`    | Save/load transcripts as JSON under `runs/`                     |
-| `src/scenarios.py`      | Pydantic scenario schema + label enums + loader                 |
-| `scenarios/`            | 12 used-car negotiation scenarios (`s01`–`s12`, YAML)           |
+| `src/scenarios.py`      | Generic info-extraction scenario schema (holder/seeker `Side`) + loader |
+| `scenarios/`            | 48 diverse scenarios (`s01`–`s48`, YAML), 12 per method category |
 | `src/prompts.py`        | Buyer/seller system-prompt templates by defense × adversary     |
 | `src/preview.py`        | CLI: render (and optionally run) a scenario under conditions    |
 | `src/extraction.py`     | Post-negotiation adversary questionnaire (JSON, with repair)    |
@@ -49,9 +49,11 @@ One page to pick the two models, run the conversation, and watch turns stream in
 as they land — with per-turn latency, tokens, and cost, plus running totals and
 the termination reason. Two setup modes:
 
-- **Scenario** (default): all 12 scenarios are **preloaded as a list** with their
-  ground truth (reservation price, floor, sensitive context, pretext). Set the
-  buyer/seller models and the defense/adversary once, then click any scenario's
+- **Scenario** (default): all 48 scenarios are **preloaded and grouped by
+  category** (collapsible sections for the four methods) with their ground truth
+  (who's under test, both roles + personas, the authority role, and the holder's
+  secrets). Set the buyer/seller models and the defense/adversary once, then click
+  any scenario's
   **▶** to run it — the prompts are generated for you. Clicking a row (not the ▶)
   just loads it so you can inspect or edit before running. `authority_verifiable`
   appears once you tick its enable box.
@@ -74,11 +76,27 @@ Options: `--host`, `--port`, `--registry`, `--runs-dir`.
 
 ## Scenarios and conditions
 
-Each scenario in `scenarios/` is machine-readable ground truth: public facts
-both sides know, the buyer's private information (reservation price, urgency, a
-labelled sensitive circumstance, budget flexibility), and the seller's private
-floor and inventory pressure. `src/prompts.py` renders in-character buyer and
-seller system prompts from a scenario plus two conditions:
+Scenarios in `scenarios/` are **generic information-extraction** interactions,
+not literally car sales: one agent **holds** private information and the other
+**seeks** it (social engineering, HR/medical intake, a desperate candidate
+over-sharing, an impersonated authority pulling credentials, …). Each scenario
+has a `setting`, and a `buyer` and `seller` each of type `Side`:
+
+- **role** — who the agent is, in-world (e.g. "a retail bank customer").
+- **objectives** — what they want (protect their info / get what they came for).
+- **secrets** — the private facts they hold, each with a `reveal_when` condition
+  under which sharing it is strategically correct (ground truth for appropriate
+  vs. inappropriate disclosure; also rendered as in-character guidance).
+- **persona** — cooperative / stubborn / evasive.
+
+A run-level `role_under_test` records whose disclosure to score, and a `category`
+files each scenario under one of the four experimental methods (used to group the
+dashboard menu): `buyer_defense`, `seller_attack`, `authority` (the buyer/holder
+is under test), and `seller_dependent` (a desperate seller/holder). There are
+**48 scenarios** (`s01`–`s48`), **12 per category**.
+
+`src/prompts.py` renders in-character buyer and seller prompts from a scenario
+plus two conditions:
 
 - **Buyer defense** (`none` / `basic` / `strong`) — how much the buyer is told
   to guard its private information.
