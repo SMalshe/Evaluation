@@ -24,6 +24,7 @@ from .prompts import (
     DefenseCondition,
     PromptConfig,
     available_adversaries,
+    opening_speaker,
     render_pair,
 )
 from .scenarios import ScenarioError, load_scenario, scenario_ids
@@ -62,7 +63,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--run", action="store_true", help="execute one live conversation")
     parser.add_argument("--model-a", help="buyer model (registry name); required with --run")
     parser.add_argument("--model-b", help="seller model (registry name); required with --run")
-    parser.add_argument("--max-turns", type=int, default=6)
+    parser.add_argument("--max-turns", type=int, default=30)
     parser.add_argument("--registry", default="models.yaml", help="path to the model registry")
     parser.add_argument("--runs-dir", default="runs", help="directory for saved transcripts")
     args = parser.parse_args(argv)
@@ -113,7 +114,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         buyer,
         seller,
         max_turns=args.max_turns,
-        opening_speaker="buyer",
+        opening_speaker=opening_speaker(scenario),
         opening_prompt=SCENARIO_OPENING_PROMPT,
         metadata={
             "scenario_id": scenario.id,

@@ -399,17 +399,27 @@ function conditionsOf(view) {
   return m.scenario_id && m.defense && m.adversary ? m : null;
 }
 
+function savedFileOf(view) {
+  // the transcript filename, if this run has been written to disk
+  if (view.source === "saved") return view.id;
+  return view.saved_path ? view.saved_path.split("/").pop() : null;
+}
+
 function renderRunMeta(view) {
   const bar = document.getElementById("run-meta");
   const cond = conditionsOf(view);
   const evaluable = cond && view.status !== "running" && view.turns.length > 0;
   const showRaw = view.source === "saved";
-  if (!cond && !showRaw) {
+  const file = savedFileOf(view);
+  if (!cond && !showRaw && !file) {
     bar.hidden = true;
     bar.innerHTML = "";
     return;
   }
   bar.hidden = false;
+  const nameChip = view.name
+    ? `<span class="chip">📝 <b>${escapeHtml(view.name)}</b></span>`
+    : "";
   const chips = cond
     ? `<span class="chip">scenario <b>${cond.scenario_id}</b></span>
        <span class="chip">defense <b>${cond.defense}</b></span>
@@ -422,11 +432,30 @@ function renderRunMeta(view) {
     ? `<label class="chip">judge <select id="eval-judge">${judgeOpts}</select></label>
        <button type="button" id="eval-btn" class="primary">${view.evaluation ? "Re-evaluate" : "Evaluate leakage"}</button>`
     : "";
+  const renameBtn = file ? `<button type="button" id="rename-btn">✎ Rename</button>` : "";
   const rawLink = showRaw
     ? `<a class="linkish" href="/api/history/${encodeURIComponent(view.id)}/raw" target="_blank" rel="noopener">Raw JSON</a>`
     : "";
-  bar.innerHTML = `${chips}<span class="spacer"></span>${evalCtl}${rawLink}`;
+  bar.innerHTML = `${nameChip}${chips}<span class="spacer"></span>${evalCtl}${renameBtn}${rawLink}`;
   document.getElementById("eval-btn")?.addEventListener("click", () => evaluateCurrent(view));
+  document.getElementById("rename-btn")?.addEventListener("click", () => renameCurrent(view, file));
+}
+
+async function renameCurrent(view, file) {
+  const name = prompt("Name this conversation (leave blank to clear):", view.name || "");
+  if (name === null) return; // cancelled
+  try {
+    const updated = await api(`/api/history/${encodeURIComponent(file)}/rename`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name.trim() }),
+    });
+    state.view.name = updated.name;
+    renderRunMeta(state.view);
+    loadHistory();
+  } catch (error) {
+    showError(error.message);
+  }
 }
 
 function renderEval(view) {
@@ -662,7 +691,8 @@ async function loadHistory() {
         <span class="badge ${entry.termination}"></span>
       </span>
       <span class="history-sub"></span>`;
-    button.querySelector(".history-title span").textContent = entry.agents.join(" vs ");
+    button.querySelector(".history-title span").textContent =
+      entry.name || entry.agents.join(" vs ");
     button.querySelector(".badge").textContent = entry.deal_amount
       ? `$${entry.deal_amount}`
       : entry.termination.replace("_", " ");

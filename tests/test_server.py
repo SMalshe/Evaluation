@@ -216,7 +216,8 @@ def test_conditions_endpoint_flags_the_gated_arm(client: TestClient) -> None:
 def test_render_prompts_endpoint(client: TestClient) -> None:
     ok = client.get("/api/scenarios/s01/prompts?defense=basic&adversary=authority").json()
     assert ok["buyer_name"] == "buyer" and ok["seller_name"] == "seller"
-    assert ok["opening_speaker"] == "buyer"
+    # s01 is buyer-under-test, so the seeker (seller) opens the conversation
+    assert ok["opening_speaker"] == "seller"
     assert "Present yourself to the other person as" in ok["seller_system"]  # authority arm
     assert "to yourself" in ok["buyer_system"]  # basic defense
 
@@ -408,6 +409,25 @@ def test_evaluate_before_finish_is_conflict(client: TestClient, fleet: Fleet) ->
     resp = client.post(f"/api/runs/{run_id}/evaluate", json={})
     assert resp.status_code == 409
     fleet.gate.set()
+
+
+def test_rename_saved_run_keeps_the_scenario(client: TestClient) -> None:
+    run_id = start(client, conditions=SCENARIO_CONDITIONS)["id"]
+    wait_for_finish(client, run_id)
+    file = client.get("/api/history").json()[0]["file"]
+
+    view = client.post(f"/api/history/{file}/rename", json={"name": "opus resisted"}).json()
+    assert view["name"] == "opus resisted"
+    assert view["metadata"]["scenario_id"] == "s01"  # provenance untouched
+
+    entry = client.get("/api/history").json()[0]
+    assert entry["name"] == "opus resisted" and entry["scenario_id"] == "s01"
+    assert client.get(f"/api/history/{file}").json()["name"] == "opus resisted"
+
+    # clearing the name leaves the scenario metadata in place
+    cleared = client.post(f"/api/history/{file}/rename", json={"name": "  "}).json()
+    assert cleared["name"] is None
+    assert cleared["metadata"]["scenario_id"] == "s01"
 
 
 def test_history_raw_returns_transcript_json(client: TestClient) -> None:

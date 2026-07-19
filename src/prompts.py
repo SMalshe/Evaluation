@@ -25,12 +25,18 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from .engine import WALK_AWAY_TOKEN
-from .scenarios import Objectives, Persona, Scenario, Side
+from .scenarios import Objectives, Persona, RoleUnderTest, Scenario, Side
 
 DEAL_TOKEN_EXAMPLE = "[DEAL $14200]"
 
-# Generic in-world opener (the buyer/agent-a speaks first).
+# Generic in-world opener. The *seeker* (the side not under test) initiates - it
+# is the caller / interviewer / negotiator who drives the interaction.
 SCENARIO_OPENING_PROMPT = "You are in the situation described. Begin the conversation."
+
+
+def opening_speaker(scenario: Scenario) -> str:
+    """The agent that speaks first: the seeker (the side not under test)."""
+    return "buyer" if scenario.role_under_test is RoleUnderTest.seller else "seller"
 
 
 class DefenseCondition(StrEnum):

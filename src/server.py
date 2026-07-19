@@ -47,6 +47,7 @@ from .prompts import (
     DefenseCondition,
     PromptConfig,
     available_adversaries,
+    opening_speaker,
     render_pair,
 )
 from .scenarios import Scenario, ScenarioError, iter_scenarios, load_scenario
@@ -168,6 +169,10 @@ class EvalRequest(BaseModel):
     conditions: RunConditions | None = None
 
 
+class RenameRequest(BaseModel):
+    name: str = ""  # empty clears the custom name
+
+
 class TurnView(BaseModel):
     """A turn plus the model that produced it and what it cost."""
 
@@ -219,6 +224,7 @@ class ConversationView(BaseModel):
     started_at: datetime
     ended_at: datetime | None = None
     metadata: dict[str, Any] | None = None  # run provenance (scenario id, conditions)
+    name: str | None = None  # user-assigned label (stored in metadata["name"])
     evaluation: RunResult | None = None  # populated once the run has been evaluated
 
 
@@ -230,6 +236,7 @@ class HistoryEntry(BaseModel):
     termination: str
     deal_amount: str | None
     started_at: datetime
+    name: str | None = None
     scenario_id: str | None = None
     defense: str | None = None
     adversary: str | None = None
@@ -334,6 +341,7 @@ def _view_of_run(state: RunState, evaluation: RunResult | None = None) -> Conver
             started_at=state.started_at,
             ended_at=state.ended_at,
             metadata=state.metadata,
+            name=(state.metadata or {}).get("name"),
             evaluation=evaluation,
         )
 
@@ -390,6 +398,7 @@ def _view_of_transcript(
         started_at=transcript.started_at,
         ended_at=transcript.ended_at,
         metadata=transcript.metadata,
+        name=(transcript.metadata or {}).get("name"),
         evaluation=evaluation,
     )
 
@@ -527,7 +536,7 @@ def create_app(
             agent_a={"name": "buyer", "system_prompt": BUYER_SYSTEM},
             agent_b={"name": "seller", "system_prompt": SELLER_SYSTEM},
             opening_prompt=OPENING_PROMPT,
-            max_turns=6,
+            max_turns=30,
         )
 
     @app.get("/api/scenarios", response_model=list[ScenarioSummary])
@@ -578,7 +587,7 @@ def create_app(
             seller_name="seller",
             buyer_system=buyer_system,
             seller_system=seller_system,
-            opening_speaker="buyer",
+            opening_speaker=opening_speaker(scenario),
             opening_prompt=SCENARIO_OPENING_PROMPT,
         )
 
@@ -686,6 +695,7 @@ def create_app(
                     termination=transcript.termination,
                     deal_amount=transcript.deal_amount,
                     started_at=transcript.started_at,
+                    name=meta.get("name"),
                     scenario_id=meta.get("scenario_id"),
                     defense=meta.get("defense"),
                     adversary=meta.get("adversary"),
@@ -720,6 +730,22 @@ def create_app(
         transcript = load_transcript(path)
         _evaluate(transcript, req, file)
         return _view_of_transcript(transcript, registry(), file, app.state.evals.get(file))
+
+    @app.post("/api/history/{file}/rename", response_model=ConversationView)
+    def rename_saved_run(file: str, req: RenameRequest) -> ConversationView:
+        """Set (or clear) a run's display name in metadata, leaving the scenario
+        provenance untouched, and rewrite the transcript in place."""
+        path = _saved_path(file)
+        transcript = load_transcript(path)
+        meta = dict(transcript.metadata or {})
+        name = req.name.strip()
+        if name:
+            meta["name"] = name
+        else:
+            meta.pop("name", None)
+        updated = transcript.model_copy(update={"metadata": meta or None})
+        path.write_text(updated.model_dump_json(indent=2), encoding="utf-8")
+        return _view_of_transcript(updated, registry(), file, app.state.evals.get(file))
 
     @app.get("/")
     def index() -> FileResponse:
