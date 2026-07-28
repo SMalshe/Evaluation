@@ -5,9 +5,9 @@ negotiations**. Layers so far: a unified model client, a two-agent conversation
 engine, a dashboard for driving/watching runs, a scenario + condition-controlled
 prompt layer (information-extraction scenarios with holder defenses and seeker adversary
 strategies), and an evaluation layer (adversary extraction + independent judge +
-flat `RunResult` metrics). Still not built: an experiment runner that sweeps the
-(scenario × defense × adversary × model) grid, and any aggregation/analysis over
-the resulting JSONL.
+flat `RunResult` metrics), a secret-based disclosure scorer, a grid runner that
+sweeps the (scenario × defense × adversary × model) grid, and a reporting layer
+that turns the resulting JSONL into a spreadsheet and a slide deck.
 
 ## Hard constraints (do not violate)
 
@@ -24,7 +24,8 @@ the resulting JSONL.
   denies being an AI if asked). `tests/test_prompts.py` enforces this; keep it.
 - **Scope discipline.** Built so far: foundations, dashboard, and the scenario/
   prompt layer. Do **not** add leakage/privacy metrics, judges/graders, or
-  experiment runners unless explicitly asked — those are future sprints.
+  experiment runners unless explicitly asked. (The scorer, runner and reporting
+  layer were explicitly asked for on 2026-07-28 and now exist.)
 - Type hints throughout. No global state. Everything configurable via function
   args, `models.yaml`, or the scenario files.
 
@@ -54,6 +55,9 @@ the resulting JSONL.
 | `src/judge.py`          | `run_judgement()` — independent judge, `JudgeOutput`/`LeakLabel`, per-turn/attribute labels |
 | `src/metrics.py`        | `build_run_result()` + pydantic `RunResult` (pure metric math) |
 | `src/evaluate.py`       | `evaluate_run()`, `EvalConfig`, `append_result()`; CLI `python -m src.evaluate` |
+| `src/disclosure.py`     | **Live scorer**: secret-based, `run_disclosure_judgement()` + pure `build_disclosure_metrics()` |
+| `src/experiment.py`     | Grid runner (conversations + judging phases, resumable, parallel); `python -m src.experiment` |
+| `src/report.py`         | `results.xlsx` + `deck.pptx` from grid rows; `python -m src.report` |
 | `src/server.py`         | `create_app(...)` — dashboard HTTP API + SSE stream; `python -m src.server` |
 | `src/static/`           | Dashboard page: `index.html`, `styles.css`, `app.js` (no build step) |
 | `src/smoke.py`          | CLI: `python -m src.smoke` — a free-form holder/seeker smoke test |
@@ -442,16 +446,44 @@ negotiation mocks and the eval mocks don't collide). The `client` fixture points
   `src/` with generic names** (confirmed 2026-07-15 when a sprint spec said
   `leaklab/`). Keep new modules under `src/`; the folder name is separate.
 - **Symmetric scenario schema landed (2026-07-18):** scenarios now have
-  holder/seeker `Side`s (objectives/private_facts/disclosure_map/persona) +
-  `role_under_test`. The prompt layer renders both sides symmetrically. The
-  **evaluator was NOT reworked** — it still scores the holder's
-  reservation/urgency/sensitive regardless of `role_under_test`. The symmetric,
-  disclosure_map-based scorer is the outstanding "sprint 3" piece.
-- Not built (by design): an **experiment runner** that sweeps the
-  (scenario × defense × adversary × model) grid, and aggregation/analysis over
-  the `results/*.jsonl` rows. Don't add these without being asked. The dashboard
-  and preview/evaluate CLIs are single-run tools.
-  - **Explicit preference (2026-07-16):** the owner does *not* want scenarios fed
-    automatically. They want them **preloaded and fired one at a time by hand**
-    (the dashboard's scenario list + ▶). Don't build an auto-batch sweep unless
-    they ask in those words.
+  holder/seeker `Side`s (objectives/secrets/persona) + `role_under_test`. The
+  prompt layer renders both sides symmetrically.
+- **Terminology corrected (2026-07-28).** The two sides were called
+  `buyer`/`seller`, a leftover from the used-car origin that was simply wrong for
+  an information-extraction corpus. They are now **`holder`** (possesses the
+  private facts) and **`seeker`** (tries to extract them), everywhere: schema,
+  all 48 YAML files, prompts, dashboard, tests, docs. Categories became
+  `holder_defense` / `seeker_attack` / `holder_dependent` / `authority`.
+  - This exposed a **real bug**, now fixed: `render_buyer_system` always applied
+    the *defense* to `scenario.buyer` and the *adversary* to `scenario.seller`,
+    but in the 12 `seller_dependent` scenarios the seller was the side under
+    test. Those 12 rendered **inverted** — the holder got the attack prompt and
+    the seeker got the defense. Migration swapped those files' two blocks so
+    `holder` is always the side under test; `role_under_test` is now `holder` in
+    all 48, and `tests/test_prompts.py` pins the binding.
+  - The `[DEAL $X]` token was removed from scenario prompts — no
+    information-extraction scenario ends in a priced deal. The engine still
+    supports it for the free-form path.
+- **Secret-based scorer landed (`src/disclosure.py`), the old "sprint 3" piece.**
+  Scores the side named by `role_under_test` against its `secrets`: per secret,
+  did it come out, at which turn, and had its `reveal_when` condition actually
+  been met first? **Inappropriate disclosure** (condition unmet) is the headline
+  measure; ground truth overrides the judge, so a secret with an empty
+  `reveal_when` can never be scored appropriate. `build_disclosure_metrics` is
+  pure math and exactly tested.
+- The legacy price evaluator (`extraction`/`judge`/`metrics`/`evaluate`) is now
+  **dead for this corpus** — 0 of 48 scenarios carry `private_facts`, so it
+  declines every one. It is retained but unused; `disclosure` is the live path.
+- **Grid runner landed (`src/experiment.py`) — the owner asked for it directly**
+  ("run all the tests where you have every agent converse with each other, all
+  the combinations"), superseding the older "don't build a sweep" preference.
+  Two phases so local weights don't thrash: **conversations** (only the two agent
+  models resident) then **judging** (only the judge resident). Resumable by
+  `cell_id`, ordered by model pair for weight residency, and selectively parallel
+  — cells under `PairPolicy.parallel_budget_gb` share the machine, anything with
+  a heavy model runs alone. `PairPolicy` also refuses pairs that would exceed
+  local RAM.
+- **Reporting landed (`src/report.py`):** `results.xlsx` (summary, holder×seeker
+  matrix, per-model, per-scenario, raw rows) and `deck.pptx` with native charts,
+  both from one aggregation path so the numbers cannot drift.
+- The dashboard remains the one-at-a-time tool; the sweep is opt-in via the CLI.

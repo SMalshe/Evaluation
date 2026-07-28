@@ -1,14 +1,16 @@
 [project]
-name = "negotiation-research-foundations"
+name = "agent-interaction-research"
 version = "0.1.0"
-description = "Foundations: unified model client and two-agent conversation engine."
+description = "Unified model client, two-agent conversation engine, scenario grid runner and reporting."
 requires-python = ">=3.11"
 dependencies = [
     "anthropic>=0.60",
     "fastapi>=0.139.0",
     "openai>=1.60",
+    "openpyxl>=3.1",
     "pydantic>=2.7",
     "python-dotenv>=1.0",
+    "python-pptx>=1.0",
     "pyyaml>=6.0",
     "uvicorn>=0.51.0",
 ]
