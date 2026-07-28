@@ -207,7 +207,7 @@ body.freeform .scenario-panel {
   display: none;
 }
 
-/* Swapping buyer/seller only makes sense in free-form; hide it in scenario mode. */
+/* Swapping holder/seeker only makes sense in free-form; hide it in scenario mode. */
 body:not(.freeform) .swap-row {
   display: none;
 }

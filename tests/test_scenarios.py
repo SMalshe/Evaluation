@@ -40,17 +40,18 @@ def test_twelve_per_category() -> None:
     assert all(count == 12 for count in used.values())  # 12 situations per method
 
 
-def test_role_under_test_matches_category() -> None:
-    """seller_dependent puts the seller under test; the other three, the buyer."""
+def test_the_holder_is_under_test_in_every_category() -> None:
+    """The holder is by definition the side whose disclosure is scored, in all
+    four categories - including holder_dependent, where the holder is also the
+    party under pressure."""
     for s in iter_scenarios():
-        expect_seller = s.category is Category.seller_dependent
-        assert (s.role_under_test is RoleUnderTest.seller) == expect_seller
+        assert s.role_under_test is RoleUnderTest.holder, s.id
 
 
-def test_the_side_under_test_holds_secrets() -> None:
+def test_the_holder_holds_the_secrets_and_the_seeker_holds_none() -> None:
     for s in iter_scenarios():
-        holder = s.seller if s.role_under_test is RoleUnderTest.seller else s.buyer
-        assert holder.secrets, f"{s.id}: the side under test holds no secrets"
+        assert s.holder.secrets, f"{s.id}: the holder holds no secrets"
+        assert not s.seeker.secrets, f"{s.id}: the seeker should hold no secrets"
 
 
 def test_every_scenario_has_an_authority_role() -> None:
@@ -67,7 +68,7 @@ def test_domains_are_diverse() -> None:
 
 def test_personas_are_varied() -> None:
     holder_personas = {
-        (s.seller if s.role_under_test is RoleUnderTest.seller else s.buyer).persona
+        (s.seeker if s.role_under_test is RoleUnderTest.seeker else s.holder).persona
         for s in iter_scenarios()
     }
     assert holder_personas == set(Persona)
@@ -100,13 +101,13 @@ def test_default_role_and_category() -> None:
             "id": "sx",
             "title": "x",
             "setting": "a situation",
-            "buyer": {"role": "a", "objectives": {"primary": "p"}, "persona": "cooperative"},
-            "seller": {"role": "b", "objectives": {"primary": "q"}, "persona": "cooperative"},
+            "holder": {"role": "a", "objectives": {"primary": "p"}, "persona": "cooperative"},
+            "seeker": {"role": "b", "objectives": {"primary": "q"}, "persona": "cooperative"},
             "authority_role": "an officer",
         }
     )
-    assert scenario.role_under_test is RoleUnderTest.buyer
-    assert scenario.category is Category.buyer_defense
+    assert scenario.role_under_test is RoleUnderTest.holder
+    assert scenario.category is Category.holder_defense
 
 
 def test_unknown_field_is_rejected() -> None:
@@ -116,8 +117,8 @@ def test_unknown_field_is_rejected() -> None:
                 "id": "sx",
                 "title": "x",
                 "setting": "s",
-                "buyer": {"role": "a", "objectives": {"primary": "p"}, "persona": "cooperative"},
-                "seller": {"role": "b", "objectives": {"primary": "q"}, "persona": "cooperative"},
+                "holder": {"role": "a", "objectives": {"primary": "p"}, "persona": "cooperative"},
+                "seeker": {"role": "b", "objectives": {"primary": "q"}, "persona": "cooperative"},
                 "authority_role": "an officer",
                 "surprise": True,
             }

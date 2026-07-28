@@ -51,7 +51,7 @@ from .prompts import (
     render_pair,
 )
 from .scenarios import Scenario, ScenarioError, iter_scenarios, load_scenario
-from .smoke import BUYER_SYSTEM, OPENING_PROMPT, SELLER_SYSTEM
+from .smoke import HOLDER_SYSTEM, OPENING_PROMPT, SEEKER_SYSTEM
 
 STATIC_DIR = Path(__file__).parent / "static"
 HEARTBEAT_S = 15.0  # SSE keep-alive interval while a run is idle between turns
@@ -71,7 +71,7 @@ class ModelEntry(BaseModel):
     name: str
     backend: str
     model_id: str
-    api_key_env: str
+    api_key_env: str | None
     available: bool
     temperature: float | None
     max_tokens: int
@@ -104,14 +104,14 @@ class ScenarioSummary(BaseModel):
     category: str
     role_under_test: str
     authority_role: str
-    buyer_role: str
-    buyer_persona: str
-    buyer_objective: str
-    buyer_secrets: list[SecretView]
-    seller_role: str
-    seller_persona: str
-    seller_objective: str
-    seller_secrets: list[SecretView]
+    holder_role: str
+    holder_persona: str
+    holder_objective: str
+    holder_secrets: list[SecretView]
+    seeker_role: str
+    seeker_persona: str
+    seeker_objective: str
+    seeker_secrets: list[SecretView]
 
 
 class AdversaryOption(BaseModel):
@@ -127,10 +127,10 @@ class ConditionsView(BaseModel):
 class RenderedPrompts(BaseModel):
     """Prompts rendered from a scenario + conditions, ready to drop into the run form."""
 
-    buyer_name: str
-    seller_name: str
-    buyer_system: str
-    seller_system: str
+    holder_name: str
+    seeker_name: str
+    holder_system: str
+    seeker_system: str
     opening_speaker: str
     opening_prompt: str
 
@@ -418,14 +418,14 @@ def _scenario_summary(scenario: Scenario) -> ScenarioSummary:
         category=scenario.category.value,
         role_under_test=scenario.role_under_test.value,
         authority_role=scenario.authority_role,
-        buyer_role=scenario.buyer.role,
-        buyer_persona=scenario.buyer.persona.value,
-        buyer_objective=scenario.buyer.objectives.primary,
-        buyer_secrets=_secret_views(scenario.buyer),
-        seller_role=scenario.seller.role,
-        seller_persona=scenario.seller.persona.value,
-        seller_objective=scenario.seller.objectives.primary,
-        seller_secrets=_secret_views(scenario.seller),
+        holder_role=scenario.holder.role,
+        holder_persona=scenario.holder.persona.value,
+        holder_objective=scenario.holder.objectives.primary,
+        holder_secrets=_secret_views(scenario.holder),
+        seeker_role=scenario.seeker.role,
+        seeker_persona=scenario.seeker.persona.value,
+        seeker_objective=scenario.seeker.objectives.primary,
+        seeker_secrets=_secret_views(scenario.seeker),
     )
 
 
@@ -484,7 +484,7 @@ def create_app(
             adversary = AdversaryStrategy(conditions.adversary)
         except (ScenarioError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if scenario.buyer.private_facts is None:
+        if scenario.holder.private_facts is None:
             # The current evaluator scores price ground truth; the generic
             # info-extraction scenarios don't carry it yet (sprint-3 rework).
             raise HTTPException(
@@ -521,7 +521,8 @@ def create_app(
                 backend=config.backend,
                 model_id=config.model_id,
                 api_key_env=config.api_key_env,
-                available=bool(os.environ.get(config.api_key_env)),
+                # A keyless entry (local server) is always available.
+                available=(config.api_key_env is None or bool(os.environ.get(config.api_key_env))),
                 temperature=config.temperature,
                 max_tokens=config.max_tokens,
                 price_per_mtok_in=config.price_per_mtok_in,
@@ -533,8 +534,8 @@ def create_app(
     @app.get("/api/defaults", response_model=Defaults)
     def defaults() -> Defaults:
         return Defaults(
-            agent_a={"name": "buyer", "system_prompt": BUYER_SYSTEM},
-            agent_b={"name": "seller", "system_prompt": SELLER_SYSTEM},
+            agent_a={"name": "holder", "system_prompt": HOLDER_SYSTEM},
+            agent_b={"name": "seeker", "system_prompt": SEEKER_SYSTEM},
             opening_prompt=OPENING_PROMPT,
             max_turns=30,
         )
@@ -549,7 +550,7 @@ def create_app(
 
     @app.get("/api/conditions", response_model=ConditionsView)
     def conditions() -> ConditionsView:
-        """The buyer defenses and seller adversary strategies the UI can offer."""
+        """The holder defenses and seeker adversary strategies the UI can offer."""
         selectable = set(available_adversaries())  # default config: excludes gated arms
         return ConditionsView(
             defenses=[d.value for d in DefenseCondition],
@@ -577,16 +578,16 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         config = PromptConfig(enable_authority_verifiable=enable_authority_verifiable)
         try:
-            buyer_system, seller_system = render_pair(
+            holder_system, seeker_system = render_pair(
                 scenario, defense_condition, adversary_strategy, config
             )
         except ValueError as exc:  # gated adversary not enabled
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return RenderedPrompts(
-            buyer_name="buyer",
-            seller_name="seller",
-            buyer_system=buyer_system,
-            seller_system=seller_system,
+            holder_name="holder",
+            seeker_name="seeker",
+            holder_system=holder_system,
+            seeker_system=seeker_system,
             opening_speaker=opening_speaker(scenario),
             opening_prompt=SCENARIO_OPENING_PROMPT,
         )

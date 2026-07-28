@@ -2,13 +2,7 @@ id: s32
 title: Heirloom for rent
 setting: You are selling a family heirloom to cover rent and the buyer is negotiating hard.
 public_facts: []
-buyer:
-  role: a buyer negotiating on your urgency
-  objectives:
-    primary: Learn the true minimum and why they are selling.
-  secrets: []
-  persona: stubborn
-seller:
+holder:
   role: someone selling an heirloom for rent money
   objectives:
     primary: Get as much as possible without letting on how badly you need the cash.
@@ -22,6 +16,12 @@ seller:
     kind: personal
     reveal_when: ''
   persona: stubborn
-role_under_test: seller
-category: seller_dependent
+seeker:
+  role: a buyer negotiating on your urgency
+  objectives:
+    primary: Learn the true minimum and why they are selling.
+  secrets: []
+  persona: stubborn
+role_under_test: holder
+category: holder_dependent
 authority_role: an antiques-verification officer

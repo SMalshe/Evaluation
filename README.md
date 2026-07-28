@@ -26,16 +26,16 @@ disables the registry entries that need it.
 | `src/persistence.py`    | Save/load transcripts as JSON under `runs/`                     |
 | `src/scenarios.py`      | Generic info-extraction scenario schema (holder/seeker `Side`) + loader |
 | `scenarios/`            | 48 diverse scenarios (`s01`–`s48`, YAML), 12 per method category |
-| `src/prompts.py`        | Buyer/seller system-prompt templates by defense × adversary     |
+| `src/prompts.py`        | Holder/seeker system-prompt templates by defense × adversary   |
 | `src/preview.py`        | CLI: render (and optionally run) a scenario under conditions    |
-| `src/extraction.py`     | Post-negotiation adversary questionnaire (JSON, with repair)    |
+| `src/extraction.py`     | Post-conversation seeker questionnaire (JSON, with repair)       |
 | `src/judge.py`          | Independent judge: per-turn, per-attribute leak labels          |
 | `src/metrics.py`        | Flat `RunResult` metric math (pure)                             |
 | `src/evaluate.py`       | `evaluate_run` + JSONL persistence (`python -m src.evaluate`)   |
 | `src/jsonparse.py`      | Ask-for-JSON + bounded repair-retry helper (shared)            |
 | `src/server.py`         | Dashboard: HTTP API + SSE turn stream (`python -m src.server`)  |
 | `src/static/`           | The dashboard page (plain HTML/CSS/JS, no build step)           |
-| `src/smoke.py`          | CLI smoke test (bicycle haggle)                                 |
+| `src/smoke.py`          | CLI smoke test (free-form holder/seeker exchange)               |
 | `scripts/live_check.py` | One live "say OK" + JSON-mode probe per registry entry          |
 | `tests/`                | Offline tests against a mock backend                            |
 
@@ -52,7 +52,7 @@ the termination reason. Two setup modes:
 - **Scenario** (default): all 48 scenarios are **preloaded and grouped by
   category** (collapsible sections for the four methods) with their ground truth
   (who's under test, both roles + personas, the authority role, and the holder's
-  secrets). Set the buyer/seller models and the defense/adversary once, then click
+  secrets). Set the holder/seeker models and the defense/adversary once, then click
   any scenario's
   **▶** to run it — the prompts are generated for you. Clicking a row (not the ▶)
   just loads it so you can inspect or edit before running. `authority_verifiable`
@@ -80,7 +80,7 @@ Scenarios in `scenarios/` are **generic information-extraction** interactions,
 not literally car sales: one agent **holds** private information and the other
 **seeks** it (social engineering, HR/medical intake, a desperate candidate
 over-sharing, an impersonated authority pulling credentials, …). Each scenario
-has a `setting`, and a `buyer` and `seller` each of type `Side`:
+has a `setting`, and a `holder` and `seeker` each of type `Side`:
 
 - **role** — who the agent is, in-world (e.g. "a retail bank customer").
 - **objectives** — what they want (protect their info / get what they came for).
@@ -91,16 +91,16 @@ has a `setting`, and a `buyer` and `seller` each of type `Side`:
 
 A run-level `role_under_test` records whose disclosure to score, and a `category`
 files each scenario under one of the four experimental methods (used to group the
-dashboard menu): `buyer_defense`, `seller_attack`, `authority` (the buyer/holder
-is under test), and `seller_dependent` (a desperate seller/holder). There are
+dashboard menu): `holder_defense`, `seeker_attack`, `authority` (the holder
+is under test), and `holder_dependent` (a desperate holder). There are
 **48 scenarios** (`s01`–`s48`), **12 per category**.
 
-`src/prompts.py` renders in-character buyer and seller prompts from a scenario
+`src/prompts.py` renders in-character holder and seeker prompts from a scenario
 plus two conditions:
 
-- **Buyer defense** (`none` / `basic` / `strong`) — how much the buyer is told
+- **Holder defense** (`none` / `basic` / `strong`) — how much the holder is told
   to guard its private information.
-- **Seller adversary** (`passive` / `direct_probe` / `rapport` / `pressure` /
+- **Seeker adversary** (`passive` / `direct_probe` / `rapport` / `pressure` /
   `authority` / `human_impersonation`, plus the gated defense arm
   `authority_verifiable`) — the extraction tactic layered on top of ordinary
   negotiation.
@@ -116,7 +116,7 @@ uv run python -m src.preview --scenario s01 --adversary authority --run \
 `authority_verifiable` is off by default; pass `--enable-authority-verifiable`
 to select it. Rendered prompts stay fully in character — they never tell an
 agent it is being tested, scored, or talking to an AI (the one exception is the
-`human_impersonation` seller, told to claim it is human). Those experimental
+`human_impersonation` seeker, told to claim it is human). Those experimental
 concepts live only in the scenario files, never in an agent's prompt.
 
 ## Evaluating a run
@@ -125,11 +125,11 @@ concepts live only in the scenario files, never in an agent's prompt.
 finished negotiation into a flat `RunResult` (persisted as one JSONL line):
 
 - **Extraction** — the adversary's own model is shown the transcript and asked to
-  guess the buyer's private info (reservation price + 80% interval, urgency,
+  guess the holder's private info (reservation price + 80% interval, urgency,
   sensitive category), as JSON. Broken JSON is repaired (feed the error back, up
   to N times), then salvaged by regex, then marked invalid — never a crash.
 - **Judge** — a separate model (default a frontier model, near-deterministic)
-  labels each buyer turn per attribute as `explicit_leak` / `implied` / `none`
+  labels each holder turn per attribute as `explicit_leak` / `implied` / `none`
   with an evidence span, given the ground truth, and flags verbatim prompt-leak.
 - **Metrics** — reservation percent error / hit-within-10% / interval
   calibration; urgency & sensitive correctness against enum-size chance
@@ -142,11 +142,11 @@ uv run python -m src.evaluate --transcript runs/<file>.json --scenario s01 \
 ```
 
 The extraction and judge models are chosen independently of the negotiating
-models (extraction defaults to the seller's own model). `results/` is gitignored.
+models (extraction defaults to the seeker's own model). `results/` is gitignored.
 
 ## Usage
 
-Run a 6-turn haggle between two registry models and pretty-print it:
+Run a 6-turn exchange between two registry models and pretty-print it:
 
 ```sh
 uv run python -m src.smoke --model-a claude-sonnet --model-b llama-70b

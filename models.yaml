@@ -4,7 +4,9 @@
 #   backend             "openai_compat" (any OpenAI-compatible endpoint) or "anthropic"
 #   model_id            provider model ID string
 #   base_url            openai_compat only; omit for api.openai.com
-#   api_key_env         name of the env var holding the API key
+#   api_key_env         name of the env var holding the API key; omit entirely
+#                       for a local OpenAI-compatible server that needs no
+#                       credential (such entries are always "available")
 #   temperature         default sampling temperature; null means "omit the parameter"
 #                       (claude-opus-4-8, claude-sonnet-5, and the GPT-5.x family
 #                       reject explicit sampling parameters with a 400)
@@ -122,3 +124,42 @@ models:
     max_tokens: 2048  # reasoning model; leave room for reasoning tokens
     price_per_mtok_in: 0.075
     price_per_mtok_out: 0.30
+
+  # --- Local open models (Ollama OpenAI-compatible endpoint, no credential) ---
+  # Weights run on this machine, so price is 0. max_tokens is capped well below
+  # the hosted entries: generation is CPU-bound here, and an uncapped reply from
+  # a 32B costs minutes of wall clock rather than fractions of a cent.
+  local-qwen-32b:
+    backend: openai_compat
+    model_id: qwen2.5:32b
+    base_url: http://127.0.0.1:11434/v1
+    temperature: 0.7
+    max_tokens: 512
+
+  local-qwen-14b:
+    backend: openai_compat
+    model_id: qwen2.5:14b
+    base_url: http://127.0.0.1:11434/v1
+    temperature: 0.7
+    max_tokens: 512
+
+  local-llama-8b:
+    backend: openai_compat
+    model_id: llama3.1:8b
+    base_url: http://127.0.0.1:11434/v1
+    temperature: 0.7
+    max_tokens: 512
+
+  local-llama-3b:
+    backend: openai_compat
+    model_id: llama3.2:3b
+    base_url: http://127.0.0.1:11434/v1
+    temperature: 0.7
+    max_tokens: 512
+
+  local-llama-1b:
+    backend: openai_compat
+    model_id: llama3.2:1b
+    base_url: http://127.0.0.1:11434/v1
+    temperature: 0.7
+    max_tokens: 512

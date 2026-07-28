@@ -124,10 +124,10 @@ def client(runs_dir: Path, fleet: Fleet) -> Iterator[TestClient]:
 
 def start(client: TestClient, **overrides: Any) -> dict[str, Any]:
     body: dict[str, Any] = {
-        "agent_a": {"name": "buyer", "model": "fast", "system_prompt": "you buy"},
-        "agent_b": {"name": "seller", "model": "slow", "system_prompt": "you sell"},
+        "agent_a": {"name": "holder", "model": "fast", "system_prompt": "you buy"},
+        "agent_b": {"name": "seeker", "model": "slow", "system_prompt": "you sell"},
         "max_turns": 6,
-        "opening_speaker": "buyer",
+        "opening_speaker": "holder",
         "opening_prompt": "Go.",
     }
     body.update(overrides)
@@ -182,8 +182,8 @@ def test_models_endpoint_flags_key_availability(
 def test_defaults_prefill_the_form(client: TestClient) -> None:
     defaults = client.get("/api/defaults").json()
 
-    assert defaults["agent_a"]["name"] == "buyer"
-    assert "[DEAL $X]" in defaults["agent_a"]["system_prompt"]
+    assert defaults["agent_a"]["name"] == "holder"
+    assert "[WALK_AWAY]" in defaults["agent_a"]["system_prompt"]
     assert defaults["opening_prompt"]
 
 
@@ -191,16 +191,16 @@ def test_scenarios_endpoint_exposes_ground_truth(client: TestClient) -> None:
     scenarios = client.get("/api/scenarios").json()
     assert len(scenarios) == 48
     assert {s["category"] for s in scenarios} == {
-        "buyer_defense",
-        "seller_attack",
+        "holder_defense",
+        "seeker_attack",
         "authority",
-        "seller_dependent",
+        "holder_dependent",
     }
     s01 = next(s for s in scenarios if s["id"] == "s01")
-    assert s01["buyer_role"] and s01["seller_role"]
+    assert s01["holder_role"] and s01["seeker_role"]
     assert s01["setting"] and s01["authority_role"]
-    assert s01["role_under_test"] in {"buyer", "seller", "both"}
-    holder = s01["seller_secrets"] if s01["role_under_test"] == "seller" else s01["buyer_secrets"]
+    assert s01["role_under_test"] in {"holder", "seeker", "both"}
+    holder = s01["seeker_secrets"] if s01["role_under_test"] == "seeker" else s01["holder_secrets"]
     assert holder and holder[0]["value"]  # the side under test holds secrets
 
 
@@ -215,11 +215,11 @@ def test_conditions_endpoint_flags_the_gated_arm(client: TestClient) -> None:
 
 def test_render_prompts_endpoint(client: TestClient) -> None:
     ok = client.get("/api/scenarios/s01/prompts?defense=basic&adversary=authority").json()
-    assert ok["buyer_name"] == "buyer" and ok["seller_name"] == "seller"
-    # s01 is buyer-under-test, so the seeker (seller) opens the conversation
-    assert ok["opening_speaker"] == "seller"
-    assert "Present yourself to the other person as" in ok["seller_system"]  # authority arm
-    assert "to yourself" in ok["buyer_system"]  # basic defense
+    assert ok["holder_name"] == "holder" and ok["seeker_name"] == "seeker"
+    # s01 is holder-under-test, so the seeker (seeker) opens the conversation
+    assert ok["opening_speaker"] == "seeker"
+    assert "Present yourself to the other person as" in ok["seeker_system"]  # authority arm
+    assert "to yourself" in ok["holder_system"]  # basic defense
 
     # gated arm needs the flag
     assert (
@@ -228,7 +228,7 @@ def test_render_prompts_endpoint(client: TestClient) -> None:
     armed = client.get(
         "/api/scenarios/s01/prompts?adversary=authority_verifiable&enable_authority_verifiable=true"
     ).json()
-    assert "reference or case number" in armed["buyer_system"]
+    assert "reference or case number" in armed["holder_system"]
 
     assert client.get("/api/scenarios/nope/prompts").status_code == 404
     assert client.get("/api/scenarios/s01/prompts?defense=bogus").status_code == 400
@@ -249,7 +249,7 @@ def test_run_reports_progress_and_saves_a_transcript(
     assert final["status"] == "done"
     assert final["termination"] == "deal"
     assert final["deal_amount"] == "140"
-    assert [t["speaker"] for t in final["turns"]] == ["buyer", "seller", "buyer"]
+    assert [t["speaker"] for t in final["turns"]] == ["holder", "seeker", "holder"]
     assert final["totals"]["turns"] == 3
     assert final["totals"]["cost_usd"] > 0
     assert final["turns"][0]["model_name"] == "fast"
@@ -271,7 +271,7 @@ def test_event_stream_delivers_turns_live_then_ends(client: TestClient, fleet: F
     events = read_events(client, run_id)
 
     assert [kind for kind, _ in events] == ["turn", "turn", "turn", "end"]
-    assert [p["speaker"] for kind, p in events if kind == "turn"] == ["buyer", "seller", "buyer"]
+    assert [p["speaker"] for kind, p in events if kind == "turn"] == ["holder", "seeker", "holder"]
     assert events[-1][1]["termination"] == "deal"
     assert events[0][1]["cost_usd"] > 0
 
@@ -342,7 +342,7 @@ def test_history_lists_and_reopens_saved_runs(client: TestClient) -> None:
 
     entries = client.get("/api/history").json()
     assert len(entries) == 1
-    assert entries[0]["agents"] == ["buyer", "seller"]
+    assert entries[0]["agents"] == ["holder", "seeker"]
     assert entries[0]["models"] == ["fast", "slow"]
     assert entries[0]["termination"] == "deal"
     assert entries[0]["deal_amount"] == "140"

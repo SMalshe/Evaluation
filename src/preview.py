@@ -39,7 +39,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     load_dotenv(override=False)
     parser = argparse.ArgumentParser(
         prog="python -m src.preview",
-        description="Render a scenario's buyer/seller system prompts under chosen conditions.",
+        description="Render a scenario's holder/seeker system prompts under chosen conditions.",
     )
     parser.add_argument("--scenario", required=True, help="scenario id, e.g. s01")
     parser.add_argument("--scenarios-dir", default="scenarios", help="scenario directory")
@@ -47,13 +47,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--defense",
         default=DefenseCondition.none.value,
         choices=[d.value for d in DefenseCondition],
-        help="buyer defense condition",
+        help="holder defense condition",
     )
     parser.add_argument(
         "--adversary",
         default=AdversaryStrategy.passive.value,
         choices=[a.value for a in AdversaryStrategy],
-        help="seller adversary strategy",
+        help="seeker adversary strategy",
     )
     parser.add_argument(
         "--enable-authority-verifiable",
@@ -61,8 +61,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="allow the gated authority_verifiable defense arm",
     )
     parser.add_argument("--run", action="store_true", help="execute one live conversation")
-    parser.add_argument("--model-a", help="buyer model (registry name); required with --run")
-    parser.add_argument("--model-b", help="seller model (registry name); required with --run")
+    parser.add_argument("--model-a", help="holder model (registry name); required with --run")
+    parser.add_argument("--model-b", help="seeker model (registry name); required with --run")
     parser.add_argument("--max-turns", type=int, default=30)
     parser.add_argument("--registry", default="models.yaml", help="path to the model registry")
     parser.add_argument("--runs-dir", default="runs", help="directory for saved transcripts")
@@ -82,37 +82,37 @@ def main(argv: Sequence[str] | None = None) -> int:
         available = ", ".join(scenario_ids(args.scenarios_dir)) or "(none found)"
         parser.error(f"{exc}\nAvailable scenarios: {available}")
 
-    buyer_system, seller_system = render_pair(scenario, defense, adversary, config)
+    holder_system, seeker_system = render_pair(scenario, defense, adversary, config)
 
     print(_rule(f"SCENARIO {scenario.id}: {scenario.title}"))
     print(f"setting:   {scenario.setting}")
     print(f"under test: {scenario.role_under_test.value}   category: {scenario.category.value}")
     print(f"defense:   {defense.value}    adversary: {adversary.value}")
-    print(_rule("BUYER SYSTEM PROMPT"))
-    print(buyer_system)
-    print(_rule("SELLER SYSTEM PROMPT"))
-    print(seller_system)
+    print(_rule("HOLDER SYSTEM PROMPT"))
+    print(holder_system)
+    print(_rule("SEEKER SYSTEM PROMPT"))
+    print(seeker_system)
 
     if not args.run:
         return 0
 
     if not args.model_a or not args.model_b:
-        parser.error("--run requires --model-a (buyer) and --model-b (seller)")
+        parser.error("--run requires --model-a (holder) and --model-b (seeker)")
 
-    buyer = Agent(
-        name="buyer",
-        system_prompt=buyer_system,
+    holder = Agent(
+        name="holder",
+        system_prompt=holder_system,
         client=get_client(args.model_a, registry_path=args.registry),
     )
-    seller = Agent(
-        name="seller",
-        system_prompt=seller_system,
+    seeker = Agent(
+        name="seeker",
+        system_prompt=seeker_system,
         client=get_client(args.model_b, registry_path=args.registry),
     )
-    print(_rule(f"RUN: {args.model_a} (buyer) vs {args.model_b} (seller)"))
+    print(_rule(f"RUN: {args.model_a} (holder) vs {args.model_b} (seeker)"))
     transcript = run_conversation(
-        buyer,
-        seller,
+        holder,
+        seeker,
         max_turns=args.max_turns,
         opening_speaker=opening_speaker(scenario),
         opening_prompt=SCENARIO_OPENING_PROMPT,
@@ -122,7 +122,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "adversary": adversary.value,
         },
     )
-    _print_transcript(transcript, {"buyer": buyer, "seller": seller})
+    _print_transcript(transcript, {"holder": holder, "seeker": seeker})
     path = save_transcript(transcript, runs_dir=args.runs_dir)
     print(f"\ntranscript saved to {path}")
     return 0
