@@ -62,6 +62,8 @@ that turns the resulting JSONL into a spreadsheet and a slide deck.
 | `src/static/`           | Dashboard page: `index.html`, `styles.css`, `app.js` (no build step) |
 | `src/smoke.py`          | CLI: `python -m src.smoke` — a free-form holder/seeker smoke test |
 | `scripts/live_check.py` | One live "say OK" + JSON-mode probe per registry entry (not in pytest) |
+| `scripts/architecture_diagram.py` | Renders `docs/architecture.png` (Pillow, no browser). Re-run it when the grid or pipeline changes — the diagram states live counts |
+| `docs/architecture.png` | One-page architecture + experimental-design diagram, referenced from the README |
 | `tests/`                | Offline tests using an in-file `MockBackend` (no network) |
 
 ## Architecture

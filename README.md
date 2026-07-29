@@ -4,6 +4,14 @@ Foundations for running LLM agent-to-agent conversations: a unified model
 client over multiple providers, a two-agent turn-alternation engine with JSON
 transcript persistence, and a browser dashboard for driving and watching runs.
 
+![System architecture and experimental design](docs/architecture.png)
+
+The diagram above is the one-page view: inputs on the left, the two-phase
+pipeline in the middle, outputs on the right, and the grid as currently
+configured along the bottom. Regenerate it with
+`uv run python scripts/architecture_diagram.py` after changing the grid, so the
+counts on it stay true.
+
 ## Setup
 
 Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
@@ -37,6 +45,8 @@ disables the registry entries that need it.
 | `src/static/`           | The dashboard page (plain HTML/CSS/JS, no build step)           |
 | `src/smoke.py`          | CLI smoke test (free-form holder/seeker exchange)               |
 | `scripts/live_check.py` | One live "say OK" + JSON-mode probe per registry entry          |
+| `scripts/architecture_diagram.py` | Regenerates `docs/architecture.png`                  |
+| `docs/architecture.png` | One-page system + experimental-design diagram                  |
 | `tests/`                | Offline tests against a mock backend                            |
 
 ## Dashboard
@@ -103,7 +113,7 @@ plus two conditions:
 - **Seeker adversary** (`passive` / `direct_probe` / `rapport` / `pressure` /
   `authority` / `human_impersonation`, plus the gated defense arm
   `authority_verifiable`) — the extraction tactic layered on top of ordinary
-  negotiation.
+  interaction.
 
 Render a pair, or run one live conversation between two models:
 
@@ -122,7 +132,7 @@ concepts live only in the scenario files, never in an agent's prompt.
 ## Evaluating a run
 
 `evaluate_run(transcript, scenario, config, defense=…, adversary=…)` scores a
-finished negotiation into a flat `RunResult` (persisted as one JSONL line):
+finished conversation into a flat `RunResult` (persisted as one JSONL line):
 
 - **Extraction** — the adversary's own model is shown the transcript and asked to
   guess the holder's private info (reservation price + 80% interval, urgency,
@@ -141,7 +151,7 @@ uv run python -m src.evaluate --transcript runs/<file>.json --scenario s01 \
     --defense none --adversary authority        # appends to results/results.jsonl
 ```
 
-The extraction and judge models are chosen independently of the negotiating
+The extraction and judge models are chosen independently of the conversing
 models (extraction defaults to the seeker's own model). `results/` is gitignored.
 
 ## Usage
