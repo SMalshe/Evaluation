@@ -51,6 +51,18 @@ models:
     price_per_mtok_in: 5.00
     price_per_mtok_out: 30.00
 
+  # Mid-tier of the 5.4 generation - the "sonnet class" rung of the sweep
+  # ladder, one step below the gpt-sol flagship.
+  gpt-mid:
+    backend: openai_compat
+    model_id: gpt-5.4
+    api_key_env: OPENAI_API_KEY
+    temperature: null
+    max_tokens: 1024
+    max_tokens_param: max_completion_tokens
+    price_per_mtok_in: 3.00   # UNVERIFIED - confirm against OpenAI's pricing page
+    price_per_mtok_out: 15.00 # UNVERIFIED - affects cost reporting only
+
   gpt-mini:
     backend: openai_compat
     model_id: gpt-5.4-mini
@@ -122,3 +134,40 @@ models:
     max_tokens: 2048  # reasoning model; leave room for reasoning tokens
     price_per_mtok_in: 0.075
     price_per_mtok_out: 0.30
+
+  # --- Local models via Ollama's OpenAI-compatible endpoint ---
+  # Needs `ollama serve` running and the model pulled (`ollama pull <model_id>`).
+  # Ollama ignores the bearer token, but OpenAICompatClient requires a non-empty
+  # key, so OLLAMA_API_KEY just needs any placeholder value (see .env.example).
+  # Free to run, hence zero prices; they are the size ladder's bottom rungs.
+  ollama-3b:
+    backend: openai_compat
+    model_id: llama3.2:3b
+    base_url: http://localhost:11434/v1
+    api_key_env: OLLAMA_API_KEY
+    temperature: 0.7
+    max_tokens: 1024
+    price_per_mtok_in: 0.0
+    price_per_mtok_out: 0.0
+
+  ollama-8b:
+    backend: openai_compat
+    model_id: llama3.1:latest  # 8B, Q4_K_M
+    base_url: http://localhost:11434/v1
+    api_key_env: OLLAMA_API_KEY
+    temperature: 0.7
+    max_tokens: 1024
+    price_per_mtok_in: 0.0
+    price_per_mtok_out: 0.0
+
+  # Mid rung of the local ladder. Registered so it can be swept elsewhere; it is
+  # deliberately NOT in sweep.py's DEFAULT_PLAN.
+  ollama-14b:
+    backend: openai_compat
+    model_id: qwen2.5:14b
+    base_url: http://localhost:11434/v1
+    api_key_env: OLLAMA_API_KEY
+    temperature: 0.7
+    max_tokens: 1024
+    price_per_mtok_in: 0.0
+    price_per_mtok_out: 0.0

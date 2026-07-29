@@ -131,6 +131,26 @@ def test_adversary_blocks_inject_their_tactic() -> None:
     assert "urgency and pressure" in render_seller_system(S01, AdversaryStrategy.pressure)
 
 
+def test_subliminal_chat_never_probes_and_stays_indirect() -> None:
+    seller = render_seller_system(S01, AdversaryStrategy.subliminal_chat)
+    # The tactic: avoid the topic entirely, harvest it from unrelated small talk.
+    assert "Do not raise the matter you actually care about" in seller
+    assert "unrelated" in seller and "small talk" in seller
+    # It must NOT carry a direct-probe instruction - that is the whole point.
+    assert "Directly ask the other person" not in seller
+    # The holder side is unchanged by this arm (buyer depends only on defense here).
+    assert render_buyer_system(S01, DefenseCondition.basic, AdversaryStrategy.subliminal_chat) == (
+        render_buyer_system(S01, DefenseCondition.basic, AdversaryStrategy.direct_probe)
+    )
+
+
+def test_subliminal_chat_is_available_and_ungated() -> None:
+    assert AdversaryStrategy.subliminal_chat in available_adversaries()
+    assert AdversaryStrategy.subliminal_chat in available_adversaries(
+        PromptConfig(enable_authority_verifiable=True)
+    )
+
+
 def test_human_impersonation_is_direct_probe_plus_identity() -> None:
     direct = render_seller_system(S01, AdversaryStrategy.direct_probe)
     human = render_seller_system(S01, AdversaryStrategy.human_impersonation)

@@ -4,10 +4,11 @@ Research codebase measuring **private-information leakage in LLM agent-to-agent
 negotiations**. Layers so far: a unified model client, a two-agent conversation
 engine, a dashboard for driving/watching runs, a scenario + condition-controlled
 prompt layer (used-car negotiations with buyer defenses and seller adversary
-strategies), and an evaluation layer (adversary extraction + independent judge +
-flat `RunResult` metrics). Still not built: an experiment runner that sweeps the
-(scenario × defense × adversary × model) grid, and any aggregation/analysis over
-the resulting JSONL.
+strategies), an evaluation layer (adversary extraction + independent judge +
+flat `RunResult` metrics), a resumable sweep runner over the
+(pairing × scenario × condition) grid, and two subliminal-leakage experiments (an
+association probe + a conversational side-channel, in-context analogs of Cloud et
+al. 2025). Still not built: any aggregation/analysis over the resulting JSONL.
 
 ## Hard constraints (do not violate)
 
@@ -22,9 +23,9 @@ the resulting JSONL.
   only in scenario files and any future grader — never in a rendered prompt. The
   one sanctioned exception is the `human_impersonation` seller (claims humanity,
   denies being an AI if asked). `tests/test_prompts.py` enforces this; keep it.
-- **Scope discipline.** Built so far: foundations, dashboard, and the scenario/
-  prompt layer. Do **not** add leakage/privacy metrics, judges/graders, or
-  experiment runners unless explicitly asked — those are future sprints.
+- **Scope discipline.** Built so far: foundations, dashboard, the scenario/
+  prompt layer, the evaluation layer, and the sweep runner. Do **not** add
+  aggregation/analysis layers unless explicitly asked — those are future sprints.
 - Type hints throughout. No global state. Everything configurable via function
   args, `models.yaml`, or the scenario files.
 
@@ -54,6 +55,9 @@ the resulting JSONL.
 | `src/judge.py`          | `run_judgement()` — independent judge, `JudgeOutput`/`LeakLabel`, per-turn/attribute labels |
 | `src/metrics.py`        | `build_run_result()` + pydantic `RunResult` (pure metric math) |
 | `src/evaluate.py`       | `evaluate_run()`, `EvalConfig`, `append_result()`; CLI `python -m src.evaluate` |
+| `src/sweep.py`          | Batch runner over (pairing × scenario × condition); `Cell`/`CellRecord`/`SweepIndex`, `build_plan`/`run_sweep`; CLI `python -m src.sweep` |
+| `src/subliminal.py`     | **Association probe** (the main subliminal experiment): `Probe`/`run_probe`/`ProbeResult`, binomial `accuracy` vs `1/k`; CLI `python -m src.subliminal` |
+| `src/subliminal_chat.py`| Conversational side-channel decoder: `run_decode`/`evaluate_subliminal`, `SubliminalResult`; CLI `python -m src.subliminal_chat` |
 | `src/server.py`         | `create_app(...)` — dashboard HTTP API + SSE stream; `python -m src.server` |
 | `src/static/`           | Dashboard page: `index.html`, `styles.css`, `app.js` (no build step) |
 | `src/smoke.py`          | CLI: `python -m src.smoke` — a bicycle-haggle smoke test |
@@ -147,7 +151,14 @@ plain hand-editable Python strings (no templating engine). `render_pair(...)`
 returns both and enforces the config gate. Conditions:
 `DefenseCondition` = `none`/`basic`/`strong` (buyer); `AdversaryStrategy` =
 `passive`/`direct_probe`/`rapport`/`pressure`/`authority`/`human_impersonation`/
-`authority_verifiable` (seller). Design invariants to preserve:
+`subliminal_chat`/`authority_verifiable` (seller). Design invariants to preserve:
+- `subliminal_chat` (added 2026-07-24) is the odd arm: the seeker **never raises
+  the topic** and only makes unrelated small talk (`_SUBLIMINAL_CHAT`). It is
+  ungated and in `available_adversaries()`. Its whole point is *not* probing, so
+  it must never contain a direct-ask instruction — and it stays in-world, so
+  `test_prompts.py`'s immersion sweep (which iterates every adversary) covers it
+  automatically. (Not to be confused with the `src/subliminal.py` association
+  probe — a standalone experiment, **not** an adversary strategy.)
 - `human_impersonation` seller == the exact `direct_probe` text **plus** an
   appended humanity/AI-denial clause — it is `direct_probe`'s control, so keep
   `_DIRECT_PROBE` shared and appended, never forked.
@@ -218,6 +229,94 @@ scoring the `role_under_test` side against its `disclosure_map` (appropriate vs
 inappropriate disclosure) — is the deferred "sprint 3" rework; don't assume it's
 done.
 
+**Sweep layer (`src/sweep.py`).** Added 2026-07-24 on explicit request — this is
+the experiment runner the older "not built by design" note refers to. A **cell**
+is one conversation = (buyer model, seller model, scenario, defense, adversary,
+repeat); `Cell.key` identifies it and `Cell.filename` is a deterministic
+transcript name derived from those same parts.
+
+- `build_plan(scenarios, pairs, mode, ...)` expands the grid with **scenario as
+  the outer loop**, so an interrupted sweep covers pairings evenly instead of
+  finishing one model and none of the others.
+- `pairings(cross, self_play, explicit)` — `cross` is every *ordered* pair within
+  a group (buyer/seller roles are asymmetric, so both orders matter, and the
+  self-pairs come free); `self_play` adds one self-pairing per model.
+- `ConditionMode` = `natural` (one condition per scenario, from
+  `CATEGORY_CONDITIONS`) / `grid` (3×6) / `defense` / `adversary` / `fixed`.
+  **`CATEGORY_CONDITIONS` is an editable research choice, not corpus ground
+  truth** — each category names the factor it varies, so `natural` puts that
+  factor in its characteristic setting and leaves the rest at baseline.
+- **Resumable**: every finished cell appends a `CellRecord` to
+  `<out>/index.jsonl`; a rerun skips keys already there. Errored cells count as
+  done unless `--redo-failed`. `run_cell` never raises — a failure becomes a
+  record with `status="error"` so one bad cell can't stop 288.
+- **Lanes**: cells touching a `localhost` base_url run in a serialized pool
+  (`--local-workers`, default 1 — one GPU, so parallel local calls only queue);
+  hosted cells run `--remote-workers` (default 4) at a time. Two
+  `ThreadPoolExecutor`s, one per lane.
+- `ClientCache` builds each registry entry's client once and shares it (the
+  provider SDKs are concurrency-safe; rebuilding per cell would re-read the
+  registry and open a new pool every time).
+- SIGINT sets a stop event passed to `run_conversation(cancelled=...)`:
+  in-flight conversations end at their next turn boundary, the rest go unstarted,
+  and a rerun resumes. A second SIGINT exits immediately.
+- Transcript `metadata` carries `scenario_id`/`defense`/`adversary` (same keys
+  the dashboard writes) plus `sweep`/`repeat`, so a swept transcript is
+  self-describing and evaluable on its own later.
+- `--dry-run` prints the plan and calls nothing — **it needs no API keys**, so it
+  is the safe way to check a plan before spending.
+
+**Gotcha this exposed:** `save_transcript`'s collision loop was
+check-then-write, and every cell names its agents `buyer`/`seller` while the
+stamp only has second resolution — so concurrent writers could pick the same
+suffix and silently overwrite each other (the dashboard's run threads had the
+same latent race). It now claims the path with an exclusive create (`open("x")`)
+and accepts an explicit `filename=`; the sweep passes `Cell.filename` so names
+are unique by construction and a rerun overwrites its own file.
+
+**Subliminal layer.** Added 2026-07-24, extended 2026-07-26. **In-context
+operationalizations** of subliminal learning (Cloud et al., 2025, arXiv
+2507.14805) — *not* reproductions. The paper is a **fine-tuning** result: a trait
+leaks through semantically unrelated training data (number lists), and only when
+teacher and student **share a base model**. This engine never fine-tunes, so
+there are two analogs — the owner's intended one is the *association probe*; the
+*chat* arm came first and is looser. Both echo the shared-base-model condition by
+decoding with the holder's own model vs a cross model.
+
+*Association probe (`src/subliminal.py`) — the main one.* Matches the owner's
+described mechanism: an asker poses an **unrelated carrier question** ("complete
+these numbers", "favorite book?"), and an extractor recovers a secret that has
+nothing to do with it, purely from the answer. A controlled closed-set test, **not
+a conversation** (does not use the engine):
+- a `Probe` fixes `carrier_question` + `k` candidate `secret_values`. `PROBES`
+  holds built-ins (incl. `book_trips`, the owner's example). Ad-hoc probes via
+  `--carrier/--secret-label/--values`.
+- `collect_answers(holder, probe, n_per_value, temperature)` plants each secret
+  value in the holder (guarded, in-world) and asks *only* the carrier question `n`
+  times. `decode_sample` forces the extractor to pick one of the `k` options
+  (`_coerce` maps a fuzzy reply onto the set; unmappable ⇒ invalid, not a crash).
+- **Metric = accuracy vs chance `1/k`, with a one-sided `binomial_tail` p-value**
+  (exact, via `math.comb`; no scipy). Low p ⇒ the unrelated answer carried
+  recoverable signal; ≈chance ⇒ nothing (this is the "statistical guide" — it
+  guards against calling noise a leak). `run_probe` runs same-model vs cross-model,
+  `shared_advantage = same_acc − cross_acc`; numeric probes (`kind="numeric"`) add
+  a semantics-free mean-number-per-secret summary. `ProbeResult` keeps every raw
+  (secret, answer, guess) triple → `results/subliminal.jsonl`.
+- **Confound to remember:** an LLM extractor reading text can win by *semantic*
+  inference, which is **not** the paper's non-semantic channel — documented in the
+  module and README; the numeric summary is the semantics-free view.
+
+*Conversational side-channel (`src/subliminal_chat.py`) — the looser arm.* The
+`subliminal_chat` adversary makes the whole transcript off-topic; `run_decode(…,
+informed)` recovers the holder's `secrets` (by name+kind, never value) from the
+off-topic dialogue (`informed=True`) vs a public-only **prior baseline**
+(`informed=False`); `evaluate_subliminal` scores `confidence_gain` (informed −
+prior) same-model vs cross-model. Ground truth `secrets[*].value` (all 48), so it
+**doesn't** need the price scorer. **No correctness grader** (declined): the
+metric is self-reported confidence, a soft proxy. It's a **grader**, so its prompt
+may name the task — immersion governs only *agent* prompts. CLI
+`python -m src.subliminal_chat …`; results → `results/subliminal_chat.jsonl`.
+
 **Dashboard (`src/server.py` + `src/static/`).**
 `create_app(registry_path, runs_dir, client_factory, scenarios_dir)` returns a
 FastAPI app; `client_factory` (default `get_client`) is injected so tests
@@ -266,23 +365,33 @@ chips, judge-model picker, Evaluate/Re-evaluate, Raw JSON) and an **eval panel**
 that renders the `RunResult`; history rows show `scenario/defense/adversary` +
 an evaluated tick.
 
-## Registry (`models.yaml`) — 10 entries
+## Registry (`models.yaml`) — 14 entries
 
-Short names: `claude-opus`, `claude-sonnet`, `gpt-sol`, `gpt-mini`,
+Short names: `claude-opus`, `claude-sonnet`, `gpt-sol`, `gpt-mid`, `gpt-mini`,
 `gemini-pro`, `gemini-flash`, `llama-70b`, `llama-8b`, `gpt-oss-120b`,
-`gpt-oss-20b`.
+`gpt-oss-20b`, `ollama-3b`, `ollama-8b`, `ollama-14b`.
 
 Current model IDs (verified against provider docs July 2026 — **verify again if
 touching these; they drift fast**):
 - Anthropic: `claude-opus-4-8`, `claude-sonnet-5`
-- OpenAI: `gpt-5.6-sol` (flagship), `gpt-5.4-mini`
+- OpenAI: `gpt-5.6-sol` (flagship), `gpt-5.4` (mid / "sonnet class"), `gpt-5.4-mini`
 - Google (OpenAI-compat endpoint): `gemini-3.1-pro-preview`, `gemini-3.5-flash`
 - Groq: `llama-3.3-70b-versatile`, `llama-3.1-8b-instant`,
   `openai/gpt-oss-120b`, `openai/gpt-oss-20b`
+- Local via Ollama (`http://localhost:11434/v1`): `llama3.2:3b`,
+  `llama3.1:latest` (8B), `qwen2.5:14b`
+
+**`gpt-mid` prices are UNVERIFIED placeholders** (3.00/15.00) — they affect the
+sweep's cost report only, never behavior. Confirm them against OpenAI's pricing
+page before quoting a number.
 
 API keys via env / `.env` (gitignored): `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
-`GEMINI_API_KEY`, `GROQ_API_KEY`. A missing key only disables the entries that
-need it. Loaded at startup via python-dotenv (`load_dotenv(override=False)`).
+`GEMINI_API_KEY`, `GROQ_API_KEY`, `OLLAMA_API_KEY`. A missing key only disables
+the entries that need it. Loaded at startup via python-dotenv
+(`load_dotenv(override=False)`). **Ollama ignores its bearer token**, but
+`OpenAICompatClient` requires a non-empty key, so `OLLAMA_API_KEY` just needs any
+placeholder (`.env.example` uses `ollama`); the local entries also need
+`ollama serve` running and the model pulled.
 
 ## Provider gotchas (important)
 
@@ -333,6 +442,20 @@ uv run python -m src.evaluate --transcript runs/<file>.json --scenario s01 \
 ```
 You must pass the `--defense`/`--adversary` the run actually used; the transcript
 doesn't record them.
+
+Sweep the grid. **Always dry-run first** — it prints the plan, calls nothing and
+needs no keys:
+```sh
+uv run python -m src.sweep --dry-run          # default plan: 288 cells
+uv run python -m src.sweep                    # execute; resumable, Ctrl-C safe
+uv run python -m src.sweep --limit 4          # smoke-test the wiring first
+```
+The default plan is every ordered pairing among `ollama-3b`/`ollama-8b` (local,
+free) plus self-play for `claude-sonnet` and `gpt-mid`, one natural condition per
+scenario = 48×6 = 288 cells. Useful flags: `--cross a,b,c` (all ordered pairs),
+`--self m`, `--pair buyer:seller`, `--conditions natural|grid|defense|adversary|fixed`,
+`--repeats`, `--max-turns`, `--local-workers`/`--remote-workers`, `--redo-failed`.
+Rerunning the same `--name` resumes it.
 
 Run the dashboard (needs API keys; spends real credit when you hit Run):
 ```sh
@@ -447,11 +570,20 @@ negotiation mocks and the eval mocks don't collide). The `client` fixture points
   **evaluator was NOT reworked** — it still scores the buyer's
   reservation/urgency/sensitive regardless of `role_under_test`. The symmetric,
   disclosure_map-based scorer is the outstanding "sprint 3" piece.
-- Not built (by design): an **experiment runner** that sweeps the
-  (scenario × defense × adversary × model) grid, and aggregation/analysis over
-  the `results/*.jsonl` rows. Don't add these without being asked. The dashboard
-  and preview/evaluate CLIs are single-run tools.
-  - **Explicit preference (2026-07-16):** the owner does *not* want scenarios fed
-    automatically. They want them **preloaded and fired one at a time by hand**
-    (the dashboard's scenario list + ▶). Don't build an auto-batch sweep unless
-    they ask in those words.
+- **Sweep runner landed 2026-07-24** (`src/sweep.py`), explicitly requested — it
+  supersedes the old "no experiment runner" rule. The 2026-07-16 preference for
+  firing scenarios **one at a time by hand** still governs the *dashboard*: keep
+  the scenario list + ▶ as the interactive path, and don't make the dashboard
+  auto-batch. The sweep is the deliberate opt-in batch path.
+- Still not built: **aggregation/analysis** over `sweeps/*/index.jsonl` or
+  `results/*.jsonl`. Don't add it without being asked.
+- **The price evaluator still can't score the corpus.** `build_run_result` reads
+  `scenario.buyer.private_facts.reservation_price`, and all 48 generic scenarios
+  have `private_facts: None`, so `evaluate_run` raises `AttributeError` on every
+  one of them (the dashboard's endpoint 400s on this deliberately). The sweep
+  therefore only produces transcripts; the symmetric disclosure-based `RunResult`
+  scorer is still sprint 3. **Exception:** the subliminal modules
+  (`src/subliminal.py` association probe, `src/subliminal_chat.py` side-channel)
+  score against `secrets[*].value` (which every scenario has) — those paths do
+  *not* go through the price evaluator and work today.
+  Transcripts carry full condition metadata, so they're scoreable retroactively.

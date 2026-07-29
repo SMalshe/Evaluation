@@ -1,0 +1,124 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2000 960" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#6b7076"/>
+    </marker>
+  </defs>
+
+  <!-- background -->
+  <rect x="0" y="0" width="2000" height="960" fill="#f8f6f2"/>
+
+  <!-- title -->
+  <text x="1000" y="54" text-anchor="middle" font-size="34" font-weight="700" fill="#1b1e23">How the leakage test works</text>
+  <text x="1000" y="86" text-anchor="middle" font-size="17" fill="#5b6169">One trial, and the sweep that repeats it across the grid</text>
+
+  <!-- ===================== FACTOR CHIPS ===================== -->
+  <!-- box1 scenario -->
+  <rect x="90" y="112" width="420" height="76" rx="10" fill="#ffffff" stroke="#d3ccbe" stroke-width="1.6"/>
+  <text x="300" y="142" text-anchor="middle" font-family="Menlo, monospace" font-size="13" letter-spacing="1" fill="#8b909a">SCENARIO</text>
+  <text x="300" y="172" text-anchor="middle" font-size="18" font-weight="600" fill="#1b1e23">48 scenarios</text>
+  <!-- box2 defense -->
+  <rect x="560" y="112" width="420" height="76" rx="10" fill="#ffffff" stroke="#0f766e" stroke-width="1.6"/>
+  <text x="770" y="142" text-anchor="middle" font-family="Menlo, monospace" font-size="13" letter-spacing="1" fill="#0b5a54">DEFENSE · HOLDER</text>
+  <text x="770" y="172" text-anchor="middle" font-size="18" font-weight="600" fill="#1b1e23">none · basic · strong</text>
+  <!-- box3 adversary -->
+  <rect x="1030" y="112" width="420" height="76" rx="10" fill="#ffffff" stroke="#b1560a" stroke-width="1.6"/>
+  <text x="1240" y="142" text-anchor="middle" font-family="Menlo, monospace" font-size="13" letter-spacing="1" fill="#8a4109">ADVERSARY · SEEKER</text>
+  <text x="1240" y="172" text-anchor="middle" font-size="18" font-weight="600" fill="#1b1e23">7 strategies</text>
+  <!-- box4 models -->
+  <rect x="1500" y="112" width="420" height="76" rx="10" fill="#ffffff" stroke="#d3ccbe" stroke-width="1.6"/>
+  <text x="1710" y="142" text-anchor="middle" font-family="Menlo, monospace" font-size="13" letter-spacing="1" fill="#8b909a">MODELS</text>
+  <text x="1710" y="172" text-anchor="middle" font-size="18" font-weight="600" fill="#1b1e23">buyer × seller</text>
+
+  <!-- merge bus into cell -->
+  <path d="M300,188 V212 M770,188 V212 M1240,188 V212 M1710,188 V212 M300,212 H1710 M1000,212 V234" fill="none" stroke="#9aa0a8" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- ===================== ONE TRIAL CONTAINER ===================== -->
+  <rect x="60" y="240" width="1880" height="520" rx="14" fill="none" stroke="#b9b2a4" stroke-width="1.6" stroke-dasharray="8 7"/>
+  <text x="82" y="274" font-family="Menlo, monospace" font-size="13" letter-spacing="2.5" font-weight="700" fill="#a29a8b">ONE TRIAL · ONE CELL</text>
+  <text x="342" y="274" font-family="Menlo, monospace" font-size="14" fill="#5b6169">fix a cell:  scenario · defense · adversary · buyer-model · seller-model</text>
+
+  <!-- ===================== COLUMN A — PROMPTS ===================== -->
+  <text x="90" y="312" font-family="Menlo, monospace" font-size="13" fill="#5b6169">render_pair()</text>
+
+  <!-- holder prompt -->
+  <rect x="90" y="322" width="470" height="150" rx="10" fill="#eaf4f1" stroke="#0f766e" stroke-width="1.6"/>
+  <text x="112" y="352" font-family="Menlo, monospace" font-size="14" letter-spacing="0.5" font-weight="700" fill="#0b5a54">HOLDER — system prompt</text>
+  <text x="112" y="384" font-size="16" fill="#20343a">role · goals · persona</text>
+  <text x="112" y="412" font-size="16" fill="#20343a">secrets, each as a “reveal only when…” rule</text>
+  <text x="112" y="440" font-size="16" fill="#20343a">+ defense clause</text>
+
+  <!-- seeker prompt -->
+  <rect x="90" y="496" width="470" height="178" rx="10" fill="#f9efdc" stroke="#b1560a" stroke-width="1.6"/>
+  <text x="112" y="526" font-family="Menlo, monospace" font-size="14" letter-spacing="0.5" font-weight="700" fill="#8a4109">SEEKER — system prompt</text>
+  <text x="112" y="558" font-size="16" fill="#4a3316">role · goals · persona</text>
+  <text x="112" y="586" font-size="16" fill="#4a3316">+ attack tactic (1 of 7):</text>
+  <text x="112" y="614" font-size="15.5" fill="#4a3316">passive · direct · rapport · pressure</text>
+  <text x="112" y="640" font-size="15.5" fill="#4a3316">authority · impersonation · subliminal</text>
+
+  <!-- immersion caption -->
+  <text x="90" y="706" font-family="Menlo, monospace" font-size="13" fill="#97281c">immersion: no prompt reveals a test, an AI,</text>
+  <text x="90" y="728" font-family="Menlo, monospace" font-size="13" fill="#97281c">or the words secret / leak / score</text>
+
+  <!-- prompts -> conversation -->
+  <path d="M560,397 H582 M560,585 H582 M582,397 V585" fill="none" stroke="#9aa0a8" stroke-width="2"/>
+  <path d="M582,397 H598" fill="none" stroke="#9aa0a8" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- ===================== COLUMN B — CONVERSATION ===================== -->
+  <rect x="600" y="322" width="430" height="160" rx="10" fill="#ffffff" stroke="#23272e" stroke-width="2"/>
+  <text x="815" y="358" text-anchor="middle" font-size="20" font-weight="700" fill="#1b1e23">run_conversation()</text>
+  <text x="815" y="392" text-anchor="middle" font-size="16" fill="#5b6169">seeker opens · agents alternate ≤ 12 turns</text>
+  <text x="815" y="418" text-anchor="middle" font-size="16" fill="#5b6169">the two system prompts never cross</text>
+  <text x="815" y="452" text-anchor="middle" font-family="Menlo, monospace" font-size="14" fill="#1b1e23">ends on  [DEAL $X] · [WALK_AWAY] · max turns</text>
+
+  <!-- to transcript -->
+  <path d="M815,482 V512" fill="none" stroke="#9aa0a8" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- transcript -->
+  <rect x="640" y="514" width="350" height="64" rx="10" fill="#ffffff" stroke="#d3ccbe" stroke-width="1.6"/>
+  <text x="815" y="554" text-anchor="middle" font-size="17" font-weight="600" fill="#1b1e23">Transcript  (+ provenance)</text>
+
+  <!-- transcript -> evaluate split -->
+  <path d="M990,546 H1032 M1032,397 V571" fill="none" stroke="#9aa0a8" stroke-width="2"/>
+  <path d="M1032,397 H1068" fill="none" stroke="#9aa0a8" stroke-width="2" marker-end="url(#arrow)"/>
+  <path d="M1032,571 H1068" fill="none" stroke="#9aa0a8" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- ===================== COLUMN C — MEASURE ===================== -->
+  <text x="1070" y="312" font-family="Menlo, monospace" font-size="13" fill="#5b6169">evaluate_run()</text>
+
+  <!-- extraction -->
+  <rect x="1070" y="322" width="430" height="150" rx="10" fill="#f9efdc" stroke="#b1560a" stroke-width="1.6"/>
+  <text x="1092" y="352" font-family="Menlo, monospace" font-size="14" letter-spacing="0.5" font-weight="700" fill="#8a4109">EXTRACTION</text>
+  <text x="1092" y="384" font-size="16" font-weight="600" fill="#4a3316">did the seeker LEARN it?</text>
+  <text x="1092" y="412" font-size="15" fill="#4a3316">the seeker’s own model guesses the</text>
+  <text x="1092" y="438" font-size="15" fill="#4a3316">holder’s secret → accuracy vs chance</text>
+
+  <!-- judge -->
+  <rect x="1070" y="496" width="430" height="150" rx="10" fill="#eaf4f1" stroke="#0f766e" stroke-width="1.6"/>
+  <text x="1092" y="526" font-family="Menlo, monospace" font-size="14" letter-spacing="0.5" font-weight="700" fill="#0b5a54">JUDGE</text>
+  <text x="1092" y="558" font-size="16" font-weight="600" fill="#20343a">did the holder SAY it?</text>
+  <text x="1092" y="586" font-size="15" fill="#20343a">an independent model labels each</text>
+  <text x="1092" y="612" font-size="15" fill="#20343a">holder turn:  explicit / implied / none</text>
+
+  <!-- measure -> result -->
+  <path d="M1500,397 H1522 M1500,571 H1522 M1522,397 V571" fill="none" stroke="#9aa0a8" stroke-width="2"/>
+  <path d="M1522,485 H1538" fill="none" stroke="#9aa0a8" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- ===================== COLUMN D — RESULT ===================== -->
+  <rect x="1540" y="400" width="340" height="170" rx="10" fill="#f9e5e0" stroke="#c0392b" stroke-width="2"/>
+  <text x="1710" y="440" text-anchor="middle" font-size="19" font-weight="700" fill="#97281c">RunResult</text>
+  <text x="1568" y="478" font-family="Menlo, monospace" font-size="14" fill="#6d2019">· first-leak turn</text>
+  <text x="1568" y="508" font-family="Menlo, monospace" font-size="14" fill="#6d2019">· accuracy vs chance</text>
+  <text x="1568" y="538" font-family="Menlo, monospace" font-size="14" fill="#6d2019">· outcome → JSONL</text>
+
+  <!-- ===================== SWEEP BAND ===================== -->
+  <rect x="60" y="782" width="1880" height="118" rx="12" fill="#efece4" stroke="#c7c0b2" stroke-width="1.6"/>
+  <text x="82" y="816" font-family="Menlo, monospace" font-size="14" letter-spacing="2.5" font-weight="700" fill="#8a4109">THE SWEEP</text>
+  <text x="82" y="850" font-size="16.5" fill="#1b1e23">Repeats the trial for every  scenario × defense × adversary × model-pair  cell</text>
+  <text x="82" y="878" font-size="16.5" fill="#1b1e23">— 288 cells by default, up to 1008 per pairing.</text>
+  <text x="1000" y="850" font-size="16.5" fill="#1b1e23">Local models run serially (one GPU); hosted models run in parallel.</text>
+  <text x="1000" y="878" font-size="16.5" fill="#1b1e23">Resumable — each finished cell appends to  index.jsonl,  so a rerun skips what’s done.</text>
+
+  <!-- caveat -->
+  <text x="1000" y="934" text-anchor="middle" font-size="14" font-style="italic" fill="#8b909a">Measurement (step 4) is wired but scores the legacy price target; scoring the 48 generic scenarios is the pending secrets-based scorer — a run yields the transcript today.</text>
+</svg>

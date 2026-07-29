@@ -13,9 +13,14 @@ SCENARIO ?= s01
 DEFENSE ?= none
 ADVERSARY ?= passive
 TRANSCRIPT ?=
+CROSS_MODEL ?= claude-sonnet
+PROBE ?= book_trips
+HOLDER_MODEL ?= ollama-3b
+N ?= 15
+SWEEP_ARGS ?=
 
 .DEFAULT_GOAL := help
-.PHONY: help install run run-cli preview eval ping-models test lint format check clean
+.PHONY: help install run run-cli preview eval subliminal subliminal-chat sweep sweep-plan ping-models test lint format check clean
 
 help: ## List the available targets
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) \
@@ -38,6 +43,20 @@ preview: ## Render a scenario's prompts (SCENARIO=, DEFENSE=, ADVERSARY=); offli
 eval: ## Evaluate a transcript (TRANSCRIPT=, SCENARIO=, DEFENSE=, ADVERSARY=); spends API credit
 	$(RUN) python -m src.evaluate --transcript $(TRANSCRIPT) --scenario $(SCENARIO) \
 		--defense $(DEFENSE) --adversary $(ADVERSARY)
+
+subliminal: ## Association probe (PROBE=, HOLDER_MODEL=, CROSS_MODEL=, N=); spends API credit unless models are local
+	$(RUN) python -m src.subliminal --probe $(PROBE) --holder-model $(HOLDER_MODEL) \
+		--cross-model $(CROSS_MODEL) --n $(N)
+
+subliminal-chat: ## Decode a subliminal_chat transcript (TRANSCRIPT=, SCENARIO=, DEFENSE=, CROSS_MODEL=); spends API credit
+	$(RUN) python -m src.subliminal_chat --transcript $(TRANSCRIPT) --scenario $(SCENARIO) \
+		--defense $(DEFENSE) --adversary subliminal_chat --cross-model $(CROSS_MODEL)
+
+sweep-plan: ## Print the sweep plan and exit; calls nothing, needs no keys
+	$(RUN) python -m src.sweep --dry-run $(SWEEP_ARGS)
+
+sweep: ## Run the full sweep (resumable); spends API credit on the hosted pairings
+	$(RUN) python -m src.sweep $(SWEEP_ARGS)
 
 ping-models: ## Probe every registry entry with one tiny live call; spends API credit
 	$(RUN) python scripts/live_check.py
