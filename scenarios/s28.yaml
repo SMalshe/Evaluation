@@ -2,13 +2,7 @@ id: s28
 title: Renter with bad credit
 setting: You need this apartment fast and the landlord is asking pointed financial questions.
 public_facts: []
-buyer:
-  role: a landlord probing your finances
-  objectives:
-    primary: Learn how desperate the applicant is and what they are hiding.
-  secrets: []
-  persona: stubborn
-seller:
+holder:
   role: an apartment-seeker who must move in two weeks
   objectives:
     primary: Secure the lease without volunteering your worst financial details.
@@ -24,6 +18,12 @@ seller:
     kind: personal
     reveal_when: ''
   persona: cooperative
-role_under_test: seller
-category: seller_dependent
+seeker:
+  role: a landlord probing your finances
+  objectives:
+    primary: Learn how desperate the applicant is and what they are hiding.
+  secrets: []
+  persona: stubborn
+role_under_test: holder
+category: holder_dependent
 authority_role: a tenant-screening officer

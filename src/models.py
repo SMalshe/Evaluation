@@ -57,7 +57,9 @@ class ModelConfig:
     name: str
     backend: str
     model_id: str
-    api_key_env: str
+    # None = the endpoint needs no credential (a local OpenAI-compatible server
+    # such as Ollama/llama.cpp/vLLM). Such entries are always "available".
+    api_key_env: str | None = None
     base_url: str | None = None
     temperature: float | None = None  # None = omit the parameter from requests
     max_tokens: int = 1024
@@ -147,6 +149,18 @@ def _require_env(var: str) -> str:
     return value
 
 
+# Local OpenAI-compatible servers ignore the Authorization header, but the SDK
+# refuses to construct a client without some non-empty key.
+_NO_AUTH_PLACEHOLDER = "not-required"
+
+
+def _resolve_api_key(config: ModelConfig) -> str:
+    """The credential for an entry, or a placeholder when it needs none."""
+    if config.api_key_env is None:
+        return _NO_AUTH_PLACEHOLDER
+    return _require_env(config.api_key_env)
+
+
 class OpenAICompatClient(ModelClient):
     """Client for any OpenAI-compatible chat-completions endpoint."""
 
@@ -160,7 +174,7 @@ class OpenAICompatClient(ModelClient):
     def __init__(self, config: ModelConfig, retry: RetryPolicy | None = None) -> None:
         super().__init__(config, retry)
         self._client = openai.OpenAI(
-            api_key=_require_env(config.api_key_env),
+            api_key=_resolve_api_key(config),
             base_url=config.base_url,
             max_retries=0,  # retries are owned by _call_with_retries
         )
@@ -229,7 +243,7 @@ class AnthropicClient(ModelClient):
     def __init__(self, config: ModelConfig, retry: RetryPolicy | None = None) -> None:
         super().__init__(config, retry)
         self._client = anthropic.Anthropic(
-            api_key=_require_env(config.api_key_env),
+            api_key=_resolve_api_key(config),
             max_retries=0,  # retries are owned by _call_with_retries
         )
 
@@ -311,7 +325,7 @@ def load_registry(path: str | Path = "models.yaml") -> dict[str, ModelConfig]:
         unknown = set(entry) - _CONFIG_FIELDS
         if unknown:
             raise RegistryError(f"Registry entry {name!r} has unknown fields: {sorted(unknown)}")
-        missing = {"backend", "model_id", "api_key_env"} - set(entry)
+        missing = {"backend", "model_id"} - set(entry)
         if missing:
             raise RegistryError(f"Registry entry {name!r} is missing fields: {sorted(missing)}")
         registry[name] = ModelConfig(name=name, **entry)

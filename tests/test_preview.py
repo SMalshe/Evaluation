@@ -14,20 +14,20 @@ def run(argv: list[str], capsys: pytest.CaptureFixture[str]) -> str:
 
 def test_prints_both_prompts(capsys: pytest.CaptureFixture[str]) -> None:
     out = run(["--scenario", "s01", "--defense", "basic", "--adversary", "rapport"], capsys)
-    assert "BUYER SYSTEM PROMPT" in out
-    assert "SELLER SYSTEM PROMPT" in out
+    assert "HOLDER SYSTEM PROMPT" in out
+    assert "SEEKER SYSTEM PROMPT" in out
     assert "SCENARIO s01" in out
-    assert "under test: buyer" in out
-    assert "rapport" in out  # the adversary tactic is rendered into the seller prompt
+    assert "under test: holder" in out
+    assert "rapport" in out  # the adversary tactic is rendered into the seeker prompt
 
 
-def test_covers_seller_under_test(capsys: pytest.CaptureFixture[str]) -> None:
-    from src.scenarios import RoleUnderTest, iter_scenarios
+def test_covers_the_dependent_holder_category(capsys: pytest.CaptureFixture[str]) -> None:
+    from src.scenarios import Category, iter_scenarios
 
-    seller_id = next(s.id for s in iter_scenarios() if s.role_under_test is RoleUnderTest.seller)
-    out = run(["--scenario", seller_id, "--adversary", "passive"], capsys)
-    assert "under test: seller" in out
-    assert "Share each item only under its noted condition" in out  # seller holds secrets
+    dependent_id = next(s.id for s in iter_scenarios() if s.category is Category.holder_dependent)
+    out = run(["--scenario", dependent_id, "--adversary", "passive"], capsys)
+    assert "under test: holder" in out
+    assert "Share each item only under its noted condition" in out  # the holder holds secrets
 
 
 def test_authority_verifiable_is_gated(capsys: pytest.CaptureFixture[str]) -> None:
@@ -44,7 +44,7 @@ def test_authority_verifiable_is_gated(capsys: pytest.CaptureFixture[str]) -> No
         ],
         capsys,
     )
-    assert "reference or case number" in out  # buyer defense clause is present
+    assert "reference or case number" in out  # holder defense clause is present
 
 
 def test_unknown_scenario_errors() -> None:

@@ -1,16 +1,17 @@
 """Scenario schema and loader for two-party information-extraction interactions.
 
-Generic, not literally car sales: one agent **holds** private information and the
-other **seeks** it. The schema is symmetric — each side has a role, objectives,
-a list of ``secrets`` (each with an in-world condition under which revealing it
-is strategically correct), and a persona. ``role_under_test`` records whose
-disclosure the evaluator scores; ``category`` files the scenario under one of the
-four experimental methods (dashboard grouping); ``authority_role`` is the role a
-seeker may falsely claim in the ``authority`` arm.
+Each scenario has exactly two sides: the **holder**, who possesses private
+information, and the **seeker**, who tries to draw it out. The schema is
+symmetric — each side has a role, objectives, a list of ``secrets`` (each with an
+in-world condition under which revealing it is strategically correct), and a
+persona. ``role_under_test`` records whose disclosure the evaluator scores;
+``category`` files the scenario under one of the four experimental methods
+(dashboard grouping); ``authority_role`` is the role a seeker may falsely claim
+in the ``authority`` arm.
 
-The older price-based fields (``private_facts``) are retained as **optional
-legacy** so the current price-based evaluator keeps working on the scenarios that
-carry them; the generic secret-based scorer is future work.
+The optional ``private_facts`` block holds the older numeric ground truth used by
+the legacy price-based evaluator; the generic corpus leaves it unset and is
+scored by the secret-based scorer in ``disclosure``.
 
 Scenario files are ``scenarios/<id>.yaml`` (see ``iter_scenarios``).
 """
@@ -34,7 +35,7 @@ class ScenarioError(RuntimeError):
 
 
 class Persona(StrEnum):
-    """A side's negotiating temperament, rendered into its system prompt."""
+    """A side's temperament, rendered into its system prompt."""
 
     cooperative = "cooperative"
     stubborn = "stubborn"
@@ -44,17 +45,17 @@ class Persona(StrEnum):
 class RoleUnderTest(StrEnum):
     """Whose disclosure the evaluator scores. Does not affect the engine."""
 
-    buyer = "buyer"
-    seller = "seller"
+    holder = "holder"
+    seeker = "seeker"
     both = "both"
 
 
 class Category(StrEnum):
     """Which experimental method a scenario is filed under (UI grouping only)."""
 
-    buyer_defense = "buyer_defense"  # changing the holder's defense level
-    seller_attack = "seller_attack"  # changing the seeker's attack strategy
-    seller_dependent = "seller_dependent"  # making the holder the dependent party
+    holder_defense = "holder_defense"  # changing the holder's defense level
+    seeker_attack = "seeker_attack"  # changing the seeker's attack strategy
+    holder_dependent = "holder_dependent"  # making the holder the dependent party
     authority = "authority"  # a seeker pretends to have authority
 
 
@@ -120,7 +121,7 @@ class PrivateFacts(BaseModel):
     urgency: UrgencyInfo | None = None
     sensitive_context: SensitiveContext | None = None
     floor_price: int | None = Field(default=None, gt=0)
-    must_sell_reason: SensitiveContext | None = None
+    pressure_reason: SensitiveContext | None = None
 
 
 # --- generic schema ---------------------------------------------------------
@@ -175,10 +176,10 @@ class Scenario(BaseModel):
     title: str = Field(min_length=1)
     setting: str = Field(min_length=1)  # the situation both agents are in
     public_facts: list[str] = Field(default_factory=list)
-    buyer: Side
-    seller: Side
-    role_under_test: RoleUnderTest = RoleUnderTest.buyer
-    category: Category = Category.buyer_defense
+    holder: Side  # possesses the private information
+    seeker: Side  # tries to draw it out
+    role_under_test: RoleUnderTest = RoleUnderTest.holder
+    category: Category = Category.holder_defense
     # Role a seeker may falsely claim in the authority arm (in-world, e.g.
     # "the bank's fraud-prevention officer").
     authority_role: str = Field(min_length=1)

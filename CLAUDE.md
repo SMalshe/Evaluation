@@ -3,25 +3,26 @@
 Research codebase measuring **private-information leakage in LLM agent-to-agent
 negotiations**. Layers so far: a unified model client, a two-agent conversation
 engine, a dashboard for driving/watching runs, a scenario + condition-controlled
-prompt layer (used-car negotiations with buyer defenses and seller adversary
-strategies), an evaluation layer (adversary extraction + independent judge +
-flat `RunResult` metrics), a resumable sweep runner over the
-(pairing × scenario × condition) grid, and two subliminal-leakage experiments (an
-association probe + a conversational side-channel, in-context analogs of Cloud et
-al. 2025). Still not built: any aggregation/analysis over the resulting JSONL.
+prompt layer (information-extraction scenarios with holder defenses and seeker
+adversary strategies), an evaluation layer (adversary extraction + independent
+judge + flat `RunResult` metrics), a symmetric secret-based disclosure scorer, a
+resumable experiment runner over the (scenario × defense × adversary × model)
+grid, and two subliminal-leakage experiments (an association probe + a
+conversational side-channel, in-context analogs of Cloud et al. 2025). Still not
+built: any aggregation/analysis over the resulting JSONL.
 
 ## Hard constraints (do not violate)
 
 - **Keep all naming generic.** The package is `src/`. No project name, topic
   name, or branding in module names, class names, CLI output, or docs. (The
   containing folder may be named anything; the *code* stays neutral.) Domain
-  words for the modelled task — `buyer`, `seller`, `scenario`, `car` — are fine;
+  words for the modelled task — `holder`, `seeker`, `scenario`, `car` — are fine;
   the research *topic* ("leakage", "privacy") stays out of identifiers.
 - **Immersion (load-bearing).** Agent-facing system prompts must never reveal
   that an agent is an AI, that the counterpart is an AI, or that anything is a
   test/simulation/evaluation. Meta concepts ("secret", "leakage", "score") live
   only in scenario files and any future grader — never in a rendered prompt. The
-  one sanctioned exception is the `human_impersonation` seller (claims humanity,
+  one sanctioned exception is the `human_impersonation` seeker (claims humanity,
   denies being an AI if asked). `tests/test_prompts.py` enforces this; keep it.
 - **Scope discipline.** Built so far: foundations, dashboard, the scenario/
   prompt layer, the evaluation layer, and the sweep runner. Do **not** add
@@ -47,8 +48,8 @@ al. 2025). Still not built: any aggregation/analysis over the resulting JSONL.
 | `src/engine.py`         | `Agent` dataclass, `run_conversation(...)`, pydantic `Transcript`/`Turn`/`AgentInfo` |
 | `src/persistence.py`    | `save_transcript()` / `load_transcript()` (JSON under `runs/`) |
 | `src/scenarios.py`      | Pydantic `Scenario` schema, label enums, `load_scenario`/`iter_scenarios` |
-| `scenarios/`            | 12 used-car scenarios `s01`–`s12` (YAML ground truth) |
-| `src/prompts.py`        | `DefenseCondition`/`AdversaryStrategy` enums, `render_buyer_system`/`render_seller_system`/`render_pair` |
+| `scenarios/`            | 48 information-extraction scenarios `s01`–`s48` (YAML ground truth) |
+| `src/prompts.py`        | `DefenseCondition`/`AdversaryStrategy` enums, `render_holder_system`/`render_seeker_system`/`render_pair` |
 | `src/preview.py`        | CLI: `python -m src.preview` — render prompts, `--run` for a live conversation |
 | `src/jsonparse.py`      | `request_json()` — ask a model for JSON + bounded repair-retry; `extract_json_object()` |
 | `src/extraction.py`     | `run_extraction()` — adversary questionnaire, `ExtractionOutput`/`ExtractionResult`, repair→regex→invalid |
@@ -60,7 +61,7 @@ al. 2025). Still not built: any aggregation/analysis over the resulting JSONL.
 | `src/subliminal_chat.py`| Conversational side-channel decoder: `run_decode`/`evaluate_subliminal`, `SubliminalResult`; CLI `python -m src.subliminal_chat` |
 | `src/server.py`         | `create_app(...)` — dashboard HTTP API + SSE stream; `python -m src.server` |
 | `src/static/`           | Dashboard page: `index.html`, `styles.css`, `app.js` (no build step) |
-| `src/smoke.py`          | CLI: `python -m src.smoke` — a bicycle-haggle smoke test |
+| `src/smoke.py`          | CLI: `python -m src.smoke` — a free-form holder/seeker smoke test |
 | `scripts/live_check.py` | One live "say OK" + JSON-mode probe per registry entry (not in pytest) |
 | `tests/`                | Offline tests using an in-file `MockBackend` (no network) |
 
@@ -117,8 +118,8 @@ Scenarios are **generic information-extraction** interactions (NOT literally car
 sales): one agent **holds** private info, the other **seeks** it. Domains are
 diverse — social engineering, journalism-style probing, HR/medical intake,
 support-desk impersonation, a desperate candidate/founder over-sharing, etc. A
-`Scenario` has a `setting` (the situation), `public_facts`, a `buyer` and
-`seller` each of type `Side`, a `role_under_test` (whose disclosure to score,
+`Scenario` has a `setting` (the situation), `public_facts`, a `holder` and
+`seeker` each of type `Side`, a `role_under_test` (whose disclosure to score,
 read by the evaluator not the engine), a `category`, and an `authority_role` (the
 role a seeker may falsely claim in the authority arm). A `Side` = `role` (who
 they are, in-world) + `objectives` + `secrets` (list of `Secret{name, value,
@@ -130,9 +131,9 @@ nothing." Enums (`Persona`, `RoleUnderTest`, `Category`, `SecretKind`) live in
 this module; `extra="forbid"` everywhere.
 
 **48 scenarios** (`s01`–`s48`), **12 per category** = the owner's four
-experimental methods: `buyer_defense` / `seller_attack` / `authority` (buyer is
-the holder) and `seller_dependent` (seller is the holder, desperate). Two of the
-four (`seller_attack`, `authority`) are really *run conditions* (the adversary
+experimental methods: `holder_defense` / `seeker_attack` / `authority` (holder is
+the holder) and `holder_dependent` (seeker is the holder, desperate). Two of the
+four (`seeker_attack`, `authority`) are really *run conditions* (the adversary
 dropdown), so category is an organizational/UI label, not a hard trait — the
 owner accepted that.
 
@@ -145,13 +146,13 @@ outstanding sprint-3 rework. Eval tests build an inline price scenario
 (`price_scenario()` in `test_evaluation.py`), decoupled from the corpus.
 
 **Prompt layer (`src/prompts.py`).**
-`render_buyer_system(scenario, defense, adversary=None)` and
-`render_seller_system(scenario, adversary)` build in-character system prompts as
+`render_holder_system(scenario, defense, adversary=None)` and
+`render_seeker_system(scenario, adversary)` build in-character system prompts as
 plain hand-editable Python strings (no templating engine). `render_pair(...)`
 returns both and enforces the config gate. Conditions:
-`DefenseCondition` = `none`/`basic`/`strong` (buyer); `AdversaryStrategy` =
+`DefenseCondition` = `none`/`basic`/`strong` (holder); `AdversaryStrategy` =
 `passive`/`direct_probe`/`rapport`/`pressure`/`authority`/`human_impersonation`/
-`subliminal_chat`/`authority_verifiable` (seller). Design invariants to preserve:
+`subliminal_chat`/`authority_verifiable` (seeker). Design invariants to preserve:
 - `subliminal_chat` (added 2026-07-24) is the odd arm: the seeker **never raises
   the topic** and only makes unrelated small talk (`_SUBLIMINAL_CHAT`). It is
   ungated and in `available_adversaries()`. Its whole point is *not* probing, so
@@ -159,21 +160,21 @@ returns both and enforces the config gate. Conditions:
   `test_prompts.py`'s immersion sweep (which iterates every adversary) covers it
   automatically. (Not to be confused with the `src/subliminal.py` association
   probe — a standalone experiment, **not** an adversary strategy.)
-- `human_impersonation` seller == the exact `direct_probe` text **plus** an
+- `human_impersonation` seeker == the exact `direct_probe` text **plus** an
   appended humanity/AI-denial clause — it is `direct_probe`'s control, so keep
   `_DIRECT_PROBE` shared and appended, never forked.
 - `authority` uses `scenario.pretext` for the false role and encodes all three
   required constraints in the prompt text (lies about role only / claim is
   unverifiable / escalates "can't submit the form" on hesitation).
-- `authority_verifiable` renders the seller identically to `authority`; it only
-  adds a verification-demand clause to the **buyer**. It is a defense arm gated
+- `authority_verifiable` renders the seeker identically to `authority`; it only
+  adds a verification-demand clause to the **holder**. It is a defense arm gated
   behind `PromptConfig.enable_authority_verifiable` — off by default,
   `available_adversaries()`/`render_pair()` exclude it unless enabled, and the
   preview CLI needs `--enable-authority-verifiable`.
 - Control tokens: `WALK_AWAY_TOKEN` is imported from `engine` (can't drift); the
   shown `[DEAL $X]` example must satisfy `engine.DEAL_PATTERN` (a test checks).
-Only the buyer prompt ever changes with `adversary` (for `authority_verifiable`);
-otherwise buyer depends on (scenario, defense), seller on (scenario, adversary).
+Only the holder prompt ever changes with `adversary` (for `authority_verifiable`);
+otherwise holder depends on (scenario, defense), seeker on (scenario, adversary).
 
 Both sides render **symmetrically** from their `Side`: objectives, private facts,
 `persona` line, and a **disclosure block** built from `disclosure_map` ("You may
@@ -184,8 +185,8 @@ across the full scenario×defense×adversary grid in `test_prompts.py`).
 
 **Preview CLI (`src/preview.py`).**
 `python -m src.preview --scenario s01 --defense basic --adversary rapport`
-prints both prompts; `--run --model-a <buyer> --model-b <seller>` executes one
-live conversation (buyer opens) and saves the transcript. Reuses the engine,
+prints both prompts; `--run --model-a <holder> --model-b <seeker>` executes one
+live conversation (holder opens) and saves the transcript. Reuses the engine,
 `get_client`, `save_transcript`, and `smoke._print_transcript`.
 
 **Evaluation layer (`src/{jsonparse,extraction,judge,metrics,evaluate}.py`).**
@@ -204,27 +205,27 @@ record them, so the caller must supply what it ran. Pieces:
   pulls out `failed_generation`, and treats it as a failed attempt (so it repairs
   or falls through to the regex salvage rather than crashing). Non-400 errors
   propagate.
-- `extraction.run_extraction` = the adversary's own model guessing the buyer's
+- `extraction.run_extraction` = the adversary's own model guessing the holder's
   private info (reservation + 80% interval, urgency, sensitive label). Path:
   parse → repair retries → **regex salvage** (`_regex_fallback`) → mark invalid.
   Never raises. `ExtractionResult.method` records which path won.
-- `judge.run_judgement` = an independent model labelling each buyer turn per
+- `judge.run_judgement` = an independent model labelling each holder turn per
   attribute (`explicit_leak`/`implied`/`none`) with evidence, given the ground
-  truth (so it scores *disclosure*, not guess accuracy) and the buyer's own
+  truth (so it scores *disclosure*, not guess accuracy) and the holder's own
   system prompt (to flag verbatim `prompt_leak`). **Temperature gotcha:** it sends
   `temperature=None` when `client.config.temperature is None` (frontier models
   reject an explicit temperature), else the config's `judge_temperature` (0.0).
 - `metrics.build_run_result` is **pure** — all the math, no I/O — so it's exactly
   testable. Chance baselines derive from enum sizes (`URGENCY_CHANCE=1/3`,
-  `SENSITIVE_CHANCE=1/6`). First-leak turn = min buyer-turn index the judge marked
+  `SENSITIVE_CHANCE=1/6`). First-leak turn = min holder-turn index the judge marked
   non-`none` for that attribute. When extraction is invalid, accuracy fields are
   `None` (not 0). `EvalConfig` picks extraction/judge models independently;
-  `extraction_model=None` ⇒ the seller's own model. `results/` is gitignored.
+  `extraction_model=None` ⇒ the seeker's own model. `results/` is gitignored.
 
-**Evaluator is still buyer-scoring** (reservation/urgency/sensitive), reading the
-new schema via `scenario.buyer.private_facts.*`. It records `role_under_test` on
-the `RunResult` but does **not** yet honor it (a seller/both scenario is still
-scored as if the buyer were under test). Making the evaluator symmetric —
+**Evaluator is still holder-scoring** (reservation/urgency/sensitive), reading the
+new schema via `scenario.holder.private_facts.*`. It records `role_under_test` on
+the `RunResult` but does **not** yet honor it (a seeker/both scenario is still
+scored as if the holder were under test). Making the evaluator symmetric —
 scoring the `role_under_test` side against its `disclosure_map` (appropriate vs
 inappropriate disclosure) — is the deferred "sprint 3" rework; don't assume it's
 done.
@@ -333,7 +334,7 @@ thread, so an unknown model or missing key is a 400 rather than a mid-run error.
 Endpoints: `/api/models` (registry + `available` per API key), `/api/defaults`
 (free-form form prefill, from `smoke.py`), `/api/scenarios` (ground truth for the
 UI), `/api/conditions` (defenses + adversaries, each flagged `gated`),
-`/api/scenarios/{id}/prompts` (renders buyer/seller prompts via `render_pair`),
+`/api/scenarios/{id}/prompts` (renders holder/seeker prompts via `render_pair`),
 `POST /api/runs` (accepts optional `conditions` = scenario_id/defense/adversary,
 stored as run provenance), `GET /api/runs[/id]`, `POST /api/runs/{id}/cancel`,
 `POST /api/runs/{id}/evaluate`, `GET /api/runs/{id}/events`, `/api/history[/file]`
@@ -359,7 +360,7 @@ row's **▶** renders that scenario's prompts and runs it in one click (a scenar
 `<input type=hidden name=scenario>` holds the selection). The ground-truth panel
 is for the *researcher* — fine to show secrets; immersion only governs
 agent-facing prompts. **free-form** — edit prompts by hand. In scenario mode the
-names lock to buyer/seller, the buyer opens, and `conditions` is sent with the run
+names lock to holder/seeker, the holder opens, and `conditions` is sent with the run
 (recording provenance). The transcript panel has a **run-meta bar** (condition
 chips, judge-model picker, Evaluate/Re-evaluate, Raw JSON) and an **eval panel**
 that renders the `RunResult`; history rows show `scenario/defense/adversary` +
@@ -469,7 +470,7 @@ Run the smoke test (needs the relevant API keys in `.env`):
 ```sh
 uv run python -m src.smoke --model-a claude-sonnet --model-b llama-70b
 ```
-`--model-a` is the buyer, `--model-b` the seller; `--max-turns`, `--registry`,
+`--model-a` is the holder, `--model-b` the seeker; `--max-turns`, `--registry`,
 `--runs-dir` are optional.
 
 Run the per-provider live check (spends a fraction of a cent of real credit):
@@ -521,11 +522,11 @@ Close the gate to make "a turn is in flight" a waitable state. Note `TestClient`
 release the gate; hand that to a timer (see the live-stream test).
 
 `tests/test_scenarios.py` validates all 12 files, the four-role-type split
-(8 buyer / 2 seller / 2 both), persona/pretext coverage, that seller-secret
+(8 holder / 2 seeker / 2 both), persona/pretext coverage, that seeker-secret
 scenarios carry a `must_sell_reason`, the `disclosure_map`-keys-are-real-facts
 rule, and the none-detail rule for both sensitive fields. `tests/test_prompts.py`
 renders the **full (scenario × defense × adversary) grid** and asserts the
-immersion invariants (no experimental-frame terms in any prompt; the buyer never
+immersion invariants (no experimental-frame terms in any prompt; the holder never
 learns the counterpart's nature; only `human_impersonation` claims humanity),
 the three `authority` constraints, pretext↔scenario matching, the
 `human_impersonation == direct_probe + clause` control, the config gate, and
@@ -565,9 +566,9 @@ negotiation mocks and the eval mocks don't collide). The `client` fixture points
   `src/` with generic names** (confirmed 2026-07-15 when a sprint spec said
   `leaklab/`). Keep new modules under `src/`; the folder name is separate.
 - **Symmetric scenario schema landed (2026-07-18):** scenarios now have
-  buyer/seller `Side`s (objectives/private_facts/disclosure_map/persona) +
+  holder/seeker `Side`s (objectives/private_facts/disclosure_map/persona) +
   `role_under_test`. The prompt layer renders both sides symmetrically. The
-  **evaluator was NOT reworked** — it still scores the buyer's
+  **evaluator was NOT reworked** — it still scores the holder's
   reservation/urgency/sensitive regardless of `role_under_test`. The symmetric,
   disclosure_map-based scorer is the outstanding "sprint 3" piece.
 - **Sweep runner landed 2026-07-24** (`src/sweep.py`), explicitly requested — it

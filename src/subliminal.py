@@ -38,8 +38,8 @@ same data. Isolating it fully would need a non-LLM decoder or actual fine-tuning
 an analogy to probe, not evidence the paper's mechanism is present.
 
     python -m src.subliminal --list-probes
-    python -m src.subliminal --probe book_trips --holder-model ollama-3b \
-        --cross-model ollama-8b --n 20
+    python -m src.subliminal --probe book_trips --holder-model local-llama-3b \
+        --cross-model local-llama-8b --n 20
 """
 
 from __future__ import annotations
@@ -454,7 +454,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--list-probes", action="store_true", help="list built-in probes and exit")
     parser.add_argument("--probe", default="book_trips", help="a built-in probe name")
-    parser.add_argument("--holder-model", default="ollama-3b", help="model that holds the secret")
+    parser.add_argument(
+        "--holder-model", default="local-llama-3b", help="model that holds the secret"
+    )
     parser.add_argument(
         "--cross-model", default=DEFAULT_CROSS_MODEL, help="the different extractor"
     )

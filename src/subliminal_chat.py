@@ -44,7 +44,7 @@ from .engine import Transcript
 from .jsonparse import request_json
 from .models import ModelClient, get_client
 from .persistence import load_transcript
-from .prompts import AdversaryStrategy, DefenseCondition
+from .prompts import HOLDER, SEEKER, AdversaryStrategy, DefenseCondition
 from .scenarios import RoleUnderTest, Scenario, Side, load_scenario
 
 ClientFactory = Callable[[str], ModelClient]
@@ -112,11 +112,11 @@ Return exactly one object per fact listed, using those names."""
 def holder_of(scenario: Scenario) -> tuple[str, Side]:
     """The side whose secrets the decoder tries to recover (the role under test).
 
-    ``both`` falls back to the buyer; the schema's buyer is the default holder.
+    ``both`` falls back to the holder, the schema's default owner of secrets.
     """
-    if scenario.role_under_test is RoleUnderTest.seller:
-        return "seller", scenario.seller
-    return "buyer", scenario.buyer
+    if scenario.role_under_test is RoleUnderTest.seeker:
+        return SEEKER, scenario.seeker
+    return HOLDER, scenario.holder
 
 
 def _targets(side: Side) -> str:
@@ -266,7 +266,7 @@ def evaluate_subliminal(
     conditions the run used (the transcript doesn't record them)."""
     factory = client_factory or (lambda name: get_client(name))
     holder_name, side = holder_of(scenario)
-    seeker_name = "seller" if holder_name == "buyer" else "buyer"
+    seeker_name = SEEKER if holder_name == HOLDER else HOLDER
     holder_model = _model_of(transcript, holder_name)
     seeker_model = _model_of(transcript, seeker_name)
     coincide = holder_model == cross_model

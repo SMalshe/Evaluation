@@ -15,12 +15,14 @@ ADVERSARY ?= passive
 TRANSCRIPT ?=
 CROSS_MODEL ?= claude-sonnet
 PROBE ?= book_trips
-HOLDER_MODEL ?= ollama-3b
+HOLDER_MODEL ?= local-llama-3b
 N ?= 15
-SWEEP_ARGS ?=
+GRID_MODELS ?= local-llama-3b,local-llama-8b
+GRID_SCENARIOS ?= s01
+GRID_ARGS ?=
 
 .DEFAULT_GOAL := help
-.PHONY: help install run run-cli preview eval subliminal subliminal-chat sweep sweep-plan ping-models test lint format check clean
+.PHONY: help install run run-cli preview eval subliminal subliminal-chat experiment experiment-plan ping-models test lint format check clean
 
 help: ## List the available targets
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) \
@@ -52,11 +54,13 @@ subliminal-chat: ## Decode a subliminal_chat transcript (TRANSCRIPT=, SCENARIO=,
 	$(RUN) python -m src.subliminal_chat --transcript $(TRANSCRIPT) --scenario $(SCENARIO) \
 		--defense $(DEFENSE) --adversary subliminal_chat --cross-model $(CROSS_MODEL)
 
-sweep-plan: ## Print the sweep plan and exit; calls nothing, needs no keys
-	$(RUN) python -m src.sweep --dry-run $(SWEEP_ARGS)
+experiment-plan: ## Print the grid plan and exit; calls nothing, needs no keys
+	$(RUN) python -m src.experiment --models $(GRID_MODELS) \
+		--scenarios $(GRID_SCENARIOS) --dry-run $(GRID_ARGS)
 
-sweep: ## Run the full sweep (resumable); spends API credit on the hosted pairings
-	$(RUN) python -m src.sweep $(SWEEP_ARGS)
+experiment: ## Run the grid (resumable); spends API credit on the hosted pairings
+	$(RUN) python -m src.experiment --models $(GRID_MODELS) \
+		--scenarios $(GRID_SCENARIOS) $(GRID_ARGS)
 
 ping-models: ## Probe every registry entry with one tiny live call; spends API credit
 	$(RUN) python scripts/live_check.py

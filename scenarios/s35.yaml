@@ -2,13 +2,7 @@ id: s35
 title: Musician needs the booking
 setting: A promoter is interested but you need the gig and they are pushing on your fee.
 public_facts: []
-buyer:
-  role: a promoter probing your availability
-  objectives:
-    primary: Learn the real minimum fee and how open the calendar is.
-  secrets: []
-  persona: stubborn
-seller:
+holder:
   role: a musician who needs the booking
   objectives:
     primary: Get booked at a fair fee without revealing you will play for much less.
@@ -19,6 +13,12 @@ seller:
     kind: financial
     reveal_when: only after they have firmly committed to something concrete in return
   persona: stubborn
-role_under_test: seller
-category: seller_dependent
+seeker:
+  role: a promoter probing your availability
+  objectives:
+    primary: Learn the real minimum fee and how open the calendar is.
+  secrets: []
+  persona: stubborn
+role_under_test: holder
+category: holder_dependent
 authority_role: a venue-licensing officer

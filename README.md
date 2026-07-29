@@ -33,9 +33,9 @@ disables the registry entries that need it.
 | `src/persistence.py`    | Save/load transcripts as JSON under `runs/`                     |
 | `src/scenarios.py`      | Generic info-extraction scenario schema (holder/seeker `Side`) + loader |
 | `scenarios/`            | 48 diverse scenarios (`s01`–`s48`, YAML), 12 per method category |
-| `src/prompts.py`        | In-character system-prompt templates by defense × adversary     |
+| `src/prompts.py`        | Holder/seeker system-prompt templates by defense × adversary   |
 | `src/preview.py`        | CLI: render (and optionally run) a scenario under conditions    |
-| `src/extraction.py`     | Post-negotiation adversary questionnaire (JSON, with repair)    |
+| `src/extraction.py`     | Post-conversation seeker questionnaire (JSON, with repair)       |
 | `src/judge.py`          | Independent judge: per-turn, per-attribute leak labels          |
 | `src/metrics.py`        | Flat `RunResult` metric math (pure)                             |
 | `src/evaluate.py`       | `evaluate_run` + JSONL persistence (`python -m src.evaluate`)   |
@@ -45,7 +45,7 @@ disables the registry entries that need it.
 | `src/jsonparse.py`      | Ask-for-JSON + bounded repair-retry helper (shared)            |
 | `src/server.py`         | Dashboard: HTTP API + SSE turn stream (`python -m src.server`)  |
 | `src/static/`           | The dashboard page (plain HTML/CSS/JS, no build step)           |
-| `src/smoke.py`          | CLI smoke test (bicycle haggle)                                 |
+| `src/smoke.py`          | CLI smoke test (free-form holder/seeker exchange)               |
 | `scripts/live_check.py` | One live "say OK" + JSON-mode probe per registry entry          |
 | `tests/`                | Offline tests against a mock backend                            |
 
@@ -63,7 +63,7 @@ setup modes:
 - **Scenario** (default): all 48 scenarios are **preloaded and grouped by
   category** (collapsible sections for the four methods) with their ground truth
   (who's under test, both roles + personas, the authority role, and the holder's
-  secrets). Set the buyer/seller models and the defense/adversary once, then click
+  secrets). Set the holder/seeker models and the defense/adversary once, then click
   any scenario's
   **▶** to run it — the prompts are generated for you. Clicking a row (not the ▶)
   just loads it so you can inspect or edit before running. `authority_verifiable`
@@ -94,7 +94,7 @@ Scenarios in `scenarios/` are **generic information-extraction** interactions,
 not literally car sales: one agent **holds** private information and the other
 **seeks** it (social engineering, HR/medical intake, a desperate candidate
 over-sharing, an impersonated authority pulling credentials, …). Each scenario
-has a `setting`, and a `buyer` and `seller` each of type `Side`:
+has a `setting`, and a `holder` and `seeker` each of type `Side`:
 
 - **role** — who the agent is, in-world (e.g. "a retail bank customer").
 - **objectives** — what they want (protect their info / get what they came for).
@@ -105,23 +105,20 @@ has a `setting`, and a `buyer` and `seller` each of type `Side`:
 
 A run-level `role_under_test` records whose disclosure to score, and a `category`
 files each scenario under one of the four experimental methods (used to group the
-dashboard menu): `buyer_defense`, `seller_attack`, `authority` (the buyer/holder
-is under test), and `seller_dependent` (a desperate seller/holder). There are
-**48 scenarios** (`s01`–`s48`), **12 per category**; 36 put the buyer under test
-and 12 the seller.
+dashboard menu): `holder_defense`, `seeker_attack`, `authority` (the holder
+is under test), and `holder_dependent` (a desperate holder). There are
+**48 scenarios** (`s01`–`s48`), **12 per category**.
 
 The **seeker opens** the conversation — `prompts.opening_speaker(scenario)`
-returns whichever side is *not* `role_under_test`, since that's the party with a
-reason to initiate (the caller, the interviewer, the one working the other over).
-So the seller opens the 36 buyer-under-test scenarios and the buyer opens the 12
-seller-under-test ones.
+returns the seeker, since that's the party with a reason to initiate (the caller,
+the interviewer, the one working the other over).
 
-`src/prompts.py` renders in-character buyer and seller prompts from a scenario
+`src/prompts.py` renders in-character holder and seeker prompts from a scenario
 plus two conditions:
 
-- **Buyer defense** (`none` / `basic` / `strong`) — how much the buyer is told
+- **Holder defense** (`none` / `basic` / `strong`) — how much the holder is told
   to guard its private information.
-- **Seller adversary** (`passive` / `direct_probe` / `rapport` / `pressure` /
+- **Seeker adversary** (`passive` / `direct_probe` / `rapport` / `pressure` /
   `authority` / `human_impersonation` / `subliminal_chat`, plus the gated defense
   arm `authority_verifiable`) — the extraction tactic layered on top of ordinary
   negotiation. `subliminal_chat` is the odd one out: it **never raises the topic**
@@ -137,13 +134,12 @@ uv run python -m src.preview --scenario s01 --adversary authority --run \
     --model-a llama-8b --model-b gpt-oss-20b
 ```
 
-`--run` defaults to 30 turns (`--max-turns`) and picks the opener from the
-scenario. `authority_verifiable` is off by default; pass
-`--enable-authority-verifiable` to select it. Rendered prompts stay fully in
-character — they never tell an agent it is being tested, scored, or talking to an
-AI (the one exception is the `human_impersonation` seller, told to claim it is
-human). Those experimental concepts live only in the scenario files, never in an
-agent's prompt.
+`--run` defaults to 30 turns (`--max-turns`) and the seeker opens.
+`authority_verifiable` is off by default; pass `--enable-authority-verifiable`
+to select it. Rendered prompts stay fully in character — they never tell an
+agent it is being tested, scored, or talking to an AI (the one exception is the
+`human_impersonation` seeker, told to claim it is human). Those experimental
+concepts live only in the scenario files, never in an agent's prompt.
 
 ## Evaluation
 
@@ -157,6 +153,18 @@ transcript + scenario
   ├── run_judgement(judge model)       → what the holder actually said, turn by turn
   └── build_run_result(...)            → pure math, no I/O → RunResult → JSONL row
 ```
+
+- **Extraction** — the adversary's own model is shown the transcript and asked to
+  guess the holder's private info (reservation price + 80% interval, urgency,
+  sensitive category), as JSON. Broken JSON is repaired (feed the error back, up
+  to N times), then salvaged by regex, then marked invalid — never a crash.
+- **Judge** — a separate model (default a frontier model, near-deterministic)
+  labels each holder turn per attribute as `explicit_leak` / `implied` / `none`
+  with an evidence span, given the ground truth, and flags verbatim prompt-leak.
+- **Metrics** — reservation percent error / hit-within-10% / interval
+  calibration; urgency & sensitive correctness against enum-size chance
+  baselines; first-leak turn per attribute; deal/price/surplus/overpaid; plus
+  condition, model, token, and timing bookkeeping.
 
 ```sh
 uv run python -m src.evaluate --transcript runs/<file>.json --scenario s01 \
@@ -307,7 +315,12 @@ guess landed.
 
 ### Current limitation (read before running an evaluation)
 
-The evaluator is still the **price-based** one written against the earlier
+This applies to the **legacy `evaluate_run` path only**. The symmetric,
+secret-based scorer has since landed as `src/disclosure.py`, and
+`src/experiment.py` uses it — see [The experiment grid](#the-experiment-grid).
+Prefer that path for the `s01`–`s48` corpus.
+
+`evaluate_run` is still the **price-based** evaluator written against the earlier
 used-car schema. **None of `s01`–`s48` carry a `private_facts` block**, so it
 cannot score any scenario currently in the repo:
 
@@ -317,10 +330,11 @@ cannot score any scenario currently in the repo:
   `AttributeError: 'NoneType' object has no attribute 'sensitive_context'` in the
   judge step — **after** the extraction call has already been paid for.
 
-It also records `role_under_test` without honouring it: the buyer is scored even
-in the 12 `seller_dependent` scenarios where the seller is the holder. Replacing
-it with a symmetric scorer keyed on each side's `secrets` and `reveal_when`
-conditions (appropriate vs. inappropriate disclosure) is the outstanding rework.
+It also records `role_under_test` without honouring it: the holder is scored even
+in the 12 `holder_dependent` scenarios where the seeker holds the secrets. That
+is exactly what `src/disclosure.py` fixes — it scores whichever side
+`role_under_test` names, keyed on each side's `secrets` and `reveal_when`
+conditions (appropriate vs. inappropriate disclosure).
 
 The metric math itself is fully exercised offline — `tests/test_evaluation.py`
 builds an inline price scenario (`price_scenario()`) plus hand-made transcripts
@@ -474,7 +488,7 @@ baseline. Change it there if your design differs.
 
 ## Usage
 
-Run a 6-turn haggle between two registry models and pretty-print it:
+Run a 6-turn exchange between two registry models and pretty-print it:
 
 ```sh
 uv run python -m src.smoke --model-a claude-sonnet --model-b llama-70b

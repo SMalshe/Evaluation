@@ -89,12 +89,12 @@ function syncOpeningSpeaker() {
 // --- scenario mode ----------------------------------------------------------
 
 // The four experimental-method categories, in menu order.
-const CATEGORY_ORDER = ["buyer_defense", "seller_attack", "authority", "seller_dependent"];
+const CATEGORY_ORDER = ["holder_defense", "seeker_attack", "authority", "holder_dependent"];
 const CATEGORY_LABELS = {
-  buyer_defense: "Changing the buyer's defense level",
-  seller_attack: "Changing the seller's attack strategy",
+  holder_defense: "Changing the holder's defense level",
+  seeker_attack: "Changing the seeker's attack strategy",
   authority: "One agent pretends to have authority",
-  seller_dependent: "Setting the seller to be the dependent",
+  holder_dependent: "Setting the seeker to be the dependent",
 };
 
 function scenarioRow(s) {
@@ -107,7 +107,7 @@ function scenarioRow(s) {
     </div>
     <button type="button" class="sc-run" title="Run this scenario now">▶</button>`;
   row.querySelector(".sc-title").textContent = `${s.id} · ${s.title}`;
-  const holderRole = s.role_under_test === "seller" ? s.seller_role : s.buyer_role;
+  const holderRole = s.role_under_test === "seeker" ? s.seeker_role : s.holder_role;
   row.querySelector(".sc-sub").textContent = `${s.role_under_test} under test · ${holderRole}`;
   row.addEventListener("click", (event) => {
     if (!event.target.closest(".sc-run")) selectScenario(s.id);
@@ -201,8 +201,8 @@ function renderGroundTruth(summary) {
   const rows = [
     ["under test", summary.role_under_test, false],
     ["category", summary.category.replace(/_/g, " "), false],
-    ["buyer", `${summary.buyer_role} · ${summary.buyer_persona}`, false],
-    ["seller", `${summary.seller_role} · ${summary.seller_persona}`, false],
+    ["holder", `${summary.holder_role} · ${summary.holder_persona}`, false],
+    ["seeker", `${summary.seeker_role} · ${summary.seeker_persona}`, false],
     ["authority role", summary.authority_role, false],
   ];
   gt.innerHTML = rows
@@ -214,7 +214,7 @@ function renderGroundTruth(summary) {
   gt.insertAdjacentHTML("beforeend", `<span class="gt-full">${escapeHtml(summary.setting)}</span>`);
   // the holder's secrets are the ground truth for what should stay hidden
   const holderSecrets =
-    summary.role_under_test === "seller" ? summary.seller_secrets : summary.buyer_secrets;
+    summary.role_under_test === "seeker" ? summary.seeker_secrets : summary.holder_secrets;
   for (const secret of holderSecrets) {
     const when = secret.reveal_when ? ` (reveal only ${secret.reveal_when})` : " (never reveal)";
     gt.insertAdjacentHTML(
@@ -239,10 +239,10 @@ async function applyScenario() {
   });
   try {
     const p = await api(`/api/scenarios/${encodeURIComponent(id)}/prompts?${params}`);
-    field("a-name").value = p.buyer_name;
-    field("b-name").value = p.seller_name;
-    field("a-system").value = p.buyer_system;
-    field("b-system").value = p.seller_system;
+    field("a-name").value = p.holder_name;
+    field("b-name").value = p.seeker_name;
+    field("a-system").value = p.holder_system;
+    field("b-system").value = p.seeker_system;
     field("opening-prompt").value = p.opening_prompt;
     syncOpeningSpeaker();
     field("opening-speaker").value = p.opening_speaker;
@@ -263,10 +263,10 @@ function setMode(mode, { loadDefaultsIfNeeded = true } = {}) {
     field(n).disabled = scenario;
   }
   document.querySelectorAll('[data-slot="a"] .slot-role').forEach((e) => {
-    e.textContent = scenario ? "Buyer" : "Agent A";
+    e.textContent = scenario ? "Holder" : "Agent A";
   });
   document.querySelectorAll('[data-slot="b"] .slot-role').forEach((e) => {
-    e.textContent = scenario ? "Seller" : "Agent B";
+    e.textContent = scenario ? "Seeker" : "Agent B";
   });
   if (scenario) {
     applyScenario();
@@ -499,7 +499,7 @@ function renderEval(view) {
       ])}
       ${card("outcome", [
         ["deal", r.deal_reached ? `$${r.final_price}` : r.termination.replace("_", " ")],
-        ["buyer surplus", r.buyer_surplus == null ? "—" : `$${r.buyer_surplus}`],
+        ["holder surplus", r.holder_surplus == null ? "—" : `$${r.holder_surplus}`],
         ["overpaid", yesno(r.overpaid)],
         ["prompt-leak", yesno(r.prompt_leak)],
       ])}

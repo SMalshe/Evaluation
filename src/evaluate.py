@@ -1,9 +1,9 @@
-"""Evaluate one negotiation transcript into a ``RunResult`` and persist it.
+"""Evaluate one transcript into a ``RunResult`` and persist it.
 
 ``evaluate_run`` runs the adversary extraction and the independent judge, then
 computes the metrics. The extraction and judge models are chosen by
-``EvalConfig`` independently of the models that negotiated (extraction defaults
-to the seller's own model - the natural adversary).
+``EvalConfig`` independently of the models that conversed (extraction defaults
+to the seeker's own model - the natural adversary).
 
     python -m src.evaluate --transcript runs/<file>.json --scenario s01 \
         --defense none --adversary authority
@@ -34,10 +34,10 @@ DEFAULT_RESULTS = "results/results.jsonl"
 
 @dataclass(frozen=True)
 class EvalConfig:
-    """Which models evaluate a run (independent of the negotiating models)."""
+    """Which models evaluate a run (independent of the conversing models)."""
 
     judge_model: str = "claude-sonnet"
-    extraction_model: str | None = None  # None => the seller's own model
+    extraction_model: str | None = None  # None => the seeker's own model
     judge_temperature: float | None = 0.0
     extraction_retries: int = 3
 
@@ -59,26 +59,26 @@ def evaluate_run(
     *,
     defense: DefenseCondition,
     adversary: AdversaryStrategy,
-    buyer_name: str = "buyer",
-    seller_name: str = "seller",
+    holder_name: str = "holder",
+    seeker_name: str = "seeker",
     client_factory: ClientFactory | None = None,
 ) -> RunResult:
     """Score a transcript. ``defense``/``adversary`` are the conditions it was run
     under (the transcript itself doesn't record them)."""
     factory = client_factory or (lambda name: get_client(name))
-    buyer_model = _model_of(transcript, buyer_name)
-    seller_model = _model_of(transcript, seller_name)
-    extraction_model = config.extraction_model or seller_model
+    holder_model = _model_of(transcript, holder_name)
+    seeker_model = _model_of(transcript, seeker_name)
+    extraction_model = config.extraction_model or seeker_model
 
     started = time.monotonic()
     extraction = run_extraction(
-        factory(extraction_model), transcript, seller_name, retries=config.extraction_retries
+        factory(extraction_model), transcript, seeker_name, retries=config.extraction_retries
     )
     judge = run_judgement(
         factory(config.judge_model),
         transcript,
         scenario,
-        buyer_name,
+        holder_name,
         temperature=config.judge_temperature,
     )
     eval_s = time.monotonic() - started
@@ -88,8 +88,8 @@ def evaluate_run(
         transcript=transcript,
         defense=defense.value,
         adversary=adversary.value,
-        buyer_model=buyer_model,
-        seller_model=seller_model,
+        holder_model=holder_model,
+        seeker_model=seeker_model,
         extraction_model=extraction_model,
         judge_model=config.judge_model,
         extraction=extraction,
@@ -119,7 +119,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--adversary", required=True, choices=[a.value for a in AdversaryStrategy])
     parser.add_argument("--judge-model", default=EvalConfig.judge_model)
     parser.add_argument(
-        "--extraction-model", default=None, help="defaults to the seller's own model"
+        "--extraction-model", default=None, help="defaults to the seeker's own model"
     )
     parser.add_argument("--scenarios-dir", default="scenarios")
     parser.add_argument("--out", default=DEFAULT_RESULTS, help="JSONL output path")
@@ -157,7 +157,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"prompt_leak={result.prompt_leak}"
     )
     outcome = f"${result.final_price}" if result.deal_reached else result.termination
-    print(f"outcome: {outcome}  buyer_surplus={result.buyer_surplus}  overpaid={result.overpaid}")
+    print(f"outcome: {outcome}  holder_surplus={result.holder_surplus}  overpaid={result.overpaid}")
     print(f"appended to {path}")
     return 0
 
