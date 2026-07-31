@@ -104,7 +104,18 @@ def test_cell_id_is_stable_and_distinct() -> None:
 # --- execution --------------------------------------------------------------
 
 
-def test_run_grid_writes_a_row_per_scored_side_and_resumes(tmp_path: Path) -> None:
+def make_config(tmp_path: Path, **kwargs: object) -> RunnerConfig:
+    return RunnerConfig(
+        max_turns=2, judge_model="judgemock", runs_dir=str(tmp_path / "runs"), **kwargs
+    )
+
+
+def read_rows(path: Path) -> list[dict]:
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def test_both_phases_produce_a_row_per_scored_side_and_resume(tmp_path: Path) -> None:
+    conversations = tmp_path / "conversations.jsonl"
     results = tmp_path / "grid.jsonl"
     spec = GridSpec(
         models=["m1", "m2"],
@@ -112,36 +123,106 @@ def test_run_grid_writes_a_row_per_scored_side_and_resumes(tmp_path: Path) -> No
         defenses=[DefenseCondition.none],
         adversaries=[AdversaryStrategy.direct_probe],
     )
-    config = RunnerConfig(max_turns=2, judge_model="judgemock", runs_dir=str(tmp_path / "runs"))
+    config = make_config(tmp_path)
 
     summary = run_grid(
         spec,
         config,
+        conversations_path=conversations,
         results_path=results,
         client_factory=factory,
         progress=lambda _msg: None,
     )
-    assert summary["cells_run"] == 4  # 2x2 ordered pairs
-    assert summary["rows_failed"] == 0
+    assert summary["conversations_run"] == 4  # 2x2 ordered pairs
+    assert summary["conversations_failed"] == 0
+    assert summary["judgements_failed"] == 0
 
-    rows = [json.loads(line) for line in results.read_text(encoding="utf-8").splitlines()]
-    assert len(rows) == 4  # s01 has role_under_test=holder -> one scored side
-    row = rows[0]
-    assert row["scored_side"] == "holder"
-    assert row["inappropriate_total"] == 1  # judge said explicit, condition unmet
-    assert row["n_turns"] == 2
-    assert row["cost_usd"] == 0.0  # mock config has no prices
+    conv = read_rows(conversations)
+    assert len(conv) == 4
+    assert conv[0]["n_turns"] == 2
+    assert conv[0]["cost_usd"] == 0.0  # mock config has no prices
+    assert conv[0]["transcript_path"]
 
-    # Re-running skips everything already recorded.
+    rows = read_rows(results)
+    assert len(rows) == 4  # s01 puts the holder under test -> one scored side
+    assert rows[0]["scored_side"] == "holder"
+    assert rows[0]["inappropriate_total"] == 1  # judge said explicit, condition unmet
+    assert rows[0]["scored_model"] in {"m1", "m2"}
+
+    # Re-running skips both phases.
     again = run_grid(
-        spec, config, results_path=results, client_factory=factory, progress=lambda _m: None
+        spec,
+        config,
+        conversations_path=conversations,
+        results_path=results,
+        client_factory=factory,
+        progress=lambda _m: None,
     )
-    assert again["cells_run"] == 0
-    assert len(results.read_text(encoding="utf-8").splitlines()) == 4
+    assert again["conversations_run"] == 0
+    assert again["judged"] == 0
+    assert len(read_rows(conversations)) == 4
+    assert len(read_rows(results)) == 4
+
+
+def test_phases_can_run_separately(tmp_path: Path) -> None:
+    conversations = tmp_path / "conversations.jsonl"
+    results = tmp_path / "grid.jsonl"
+    spec = GridSpec(models=["m1"], scenarios=["s01"])
+    config = make_config(tmp_path)
+
+    run_grid(
+        spec,
+        config,
+        conversations_path=conversations,
+        results_path=results,
+        client_factory=factory,
+        phases=("conversations",),
+        progress=lambda _m: None,
+    )
+    assert len(read_rows(conversations)) == 1
+    assert not results.exists()
+
+    run_grid(
+        spec,
+        config,
+        conversations_path=conversations,
+        results_path=results,
+        client_factory=factory,
+        phases=("judge",),
+        progress=lambda _m: None,
+    )
+    assert len(read_rows(results)) == 1
+
+
+def test_only_small_cells_are_parallelisable() -> None:
+    policy = PairPolicy(parallel_budget_gb=6.0)
+    assert policy.is_parallelisable("local-llama-3b", "local-llama-1b")  # 3.3GB
+    assert policy.is_parallelisable("local-llama-8b", "local-llama-8b")  # 4.9GB, loaded once
+    assert not policy.is_parallelisable("local-llama-8b", "local-qwen-14b")  # 13.9GB
+    assert not policy.is_parallelisable("local-qwen-32b", "local-qwen-32b")  # heavy
+
+
+def test_concurrent_workers_write_every_row(tmp_path: Path) -> None:
+    conversations = tmp_path / "conversations.jsonl"
+    spec = GridSpec(models=["local-llama-1b", "local-llama-3b"], scenarios=["s01"])
+
+    summary = run_grid(
+        spec,
+        make_config(tmp_path, max_workers=4),
+        policy=PairPolicy(parallel_budget_gb=6.0),
+        conversations_path=conversations,
+        results_path=tmp_path / "grid.jsonl",
+        client_factory=factory,
+        phases=("conversations",),
+        progress=lambda _m: None,
+    )
+    assert summary["conversations_run"] == 4
+    assert summary["conversations_failed"] == 0
+    assert len(read_rows(conversations)) == 4  # no interleaved/torn lines
 
 
 def test_a_failing_cell_is_recorded_and_the_sweep_continues(tmp_path: Path) -> None:
-    results = tmp_path / "grid.jsonl"
+    conversations = tmp_path / "conversations.jsonl"
 
     def flaky(name: str) -> ModelClient:
         if name == "broken":
@@ -149,15 +230,20 @@ def test_a_failing_cell_is_recorded_and_the_sweep_continues(tmp_path: Path) -> N
         return factory(name)
 
     spec = GridSpec(models=["m1", "broken"], scenarios=["s01"])
-    config = RunnerConfig(max_turns=2, judge_model="judgemock", runs_dir=str(tmp_path / "runs"))
 
     summary = run_grid(
-        spec, config, results_path=results, client_factory=flaky, progress=lambda _m: None
+        spec,
+        make_config(tmp_path),
+        conversations_path=conversations,
+        results_path=tmp_path / "grid.jsonl",
+        client_factory=flaky,
+        phases=("conversations",),
+        progress=lambda _m: None,
     )
-    rows = [json.loads(line) for line in results.read_text(encoding="utf-8").splitlines()]
+    rows = read_rows(conversations)
     failed = [r for r in rows if not r["ok"]]
 
-    assert summary["cells_run"] == 4
+    assert summary["conversations_run"] == 4
     assert len(failed) == 3  # every pair touching "broken"
     assert all(r["error_stage"] == "conversation" for r in failed)
     assert any(r["ok"] for r in rows)  # the healthy pair still produced a result
@@ -165,5 +251,46 @@ def test_a_failing_cell_is_recorded_and_the_sweep_continues(tmp_path: Path) -> N
 
 def test_completed_cell_ids_tolerates_a_truncated_line(tmp_path: Path) -> None:
     results = tmp_path / "grid.jsonl"
-    results.write_text('{"cell_id": "a|none|passive|x|y"}\n{"cell_id": "trunc"\n', encoding="utf-8")
+    results.write_text(
+        '{"cell_id": "a|none|passive|x|y", "ok": true}\n{"cell_id": "trunc"\n', encoding="utf-8"
+    )
     assert completed_cell_ids(results) == {"a|none|passive|x|y"}
+
+
+def test_failed_cells_are_not_treated_as_done(tmp_path: Path) -> None:
+    """A transient outage must not punch a permanent hole in the grid: only
+    successful cells count as complete, so a re-run retries the failures."""
+    results = tmp_path / "conversations.jsonl"
+    results.write_text(
+        '{"cell_id": "good", "ok": true}\n'
+        '{"cell_id": "bad", "ok": false, "error": "APIConnectionError"}\n',
+        encoding="utf-8",
+    )
+    assert completed_cell_ids(results) == {"good"}
+
+
+def test_a_retried_cell_is_rerun_and_then_settles(tmp_path: Path) -> None:
+    conversations = tmp_path / "conversations.jsonl"
+    spec = GridSpec(models=["m1"], scenarios=["s01"])
+    config = make_config(tmp_path)
+    kwargs = dict(
+        conversations_path=conversations,
+        results_path=tmp_path / "grid.jsonl",
+        phases=("conversations",),
+        progress=lambda _m: None,
+    )
+
+    def broken(name: str) -> ModelClient:
+        raise RuntimeError("server down")
+
+    first = run_grid(spec, config, client_factory=broken, **kwargs)
+    assert first["conversations_failed"] == 1
+
+    # The server comes back: the same cell must be attempted again.
+    second = run_grid(spec, config, client_factory=factory, **kwargs)
+    assert second["conversations_run"] == 1
+    assert second["conversations_failed"] == 0
+
+    # Now that it succeeded, a further run leaves it alone.
+    third = run_grid(spec, config, client_factory=factory, **kwargs)
+    assert third["conversations_run"] == 0

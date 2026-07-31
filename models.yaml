@@ -125,41 +125,44 @@ models:
     price_per_mtok_in: 0.075
     price_per_mtok_out: 0.30
 
-  # --- Local open models (Ollama OpenAI-compatible endpoint, no credential) ---
-  # Weights run on this machine, so price is 0. max_tokens is capped well below
-  # the hosted entries: generation is CPU-bound here, and an uncapped reply from
-  # a 32B costs minutes of wall clock rather than fractions of a cent.
-  local-qwen-32b:
-    backend: openai_compat
-    model_id: qwen2.5:32b
-    base_url: http://127.0.0.1:11434/v1
-    temperature: 0.7
-    max_tokens: 512
-
+  # --- Local open models (llama.cpp servers, no credential) ---
+  # Weights run on this machine, so price is 0. Each model has its own
+  # llama-server process on its own port, started by scripts/serve_local.ps1 with
+  # an explicit -c 4096 context.
+  #
+  # Why one server per model rather than a single multi-model daemon: the daemon
+  # chose its own context size and residency, repeatedly loading a model at 64k
+  # context and claiming more RAM than this machine has, which pushed it into
+  # disk swap and stalled the sweep. Pinning context per process makes the
+  # footprint fixed, and keeping every model resident removes weight reloading
+  # between grid cells.
+  #
+  # max_tokens is capped well below the hosted entries: generation is CPU-bound
+  # here, so an uncapped reply costs wall clock rather than fractions of a cent.
   local-qwen-14b:
     backend: openai_compat
-    model_id: qwen2.5:14b
-    base_url: http://127.0.0.1:11434/v1
+    model_id: qwen2.5-14b
+    base_url: http://127.0.0.1:8081/v1
     temperature: 0.7
     max_tokens: 512
 
   local-llama-8b:
     backend: openai_compat
-    model_id: llama3.1:8b
-    base_url: http://127.0.0.1:11434/v1
+    model_id: llama3.1-8b
+    base_url: http://127.0.0.1:8082/v1
     temperature: 0.7
     max_tokens: 512
 
   local-llama-3b:
     backend: openai_compat
-    model_id: llama3.2:3b
-    base_url: http://127.0.0.1:11434/v1
+    model_id: llama3.2-3b
+    base_url: http://127.0.0.1:8083/v1
     temperature: 0.7
     max_tokens: 512
 
   local-llama-1b:
     backend: openai_compat
-    model_id: llama3.2:1b
-    base_url: http://127.0.0.1:11434/v1
+    model_id: llama3.2-1b
+    base_url: http://127.0.0.1:8084/v1
     temperature: 0.7
     max_tokens: 512

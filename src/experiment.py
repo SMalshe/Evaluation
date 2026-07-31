@@ -1,19 +1,29 @@
 """Grid runner: every model pair against every scenario/condition cell.
 
 One *cell* is a fully specified run:
-``(scenario, defense, adversary, holder_model, seeker_model)``. For each cell the
-runner renders the pair of system prompts, executes the conversation, scores the
-side(s) named by ``role_under_test`` with the secret-based scorer, and appends one
-flat JSONL row per scored side.
+``(scenario, defense, adversary, holder_model, seeker_model)``. The sweep runs in
+two phases, which matters when the models are local weights rather than a hosted
+API:
 
-Two properties matter for a sweep that takes hours:
+* **Phase 1 - conversations.** Render the pair of system prompts, run the
+  conversation, append one row to the conversations file. Only the two agent
+  models are needed, so a local server keeps just those resident.
+* **Phase 2 - judging.** Re-read each transcript and score the side(s) named by
+  ``role_under_test`` with the secret-based scorer, appending one row per scored
+  side. Only the judge model is needed, so it stays resident for the whole phase.
 
-* **Resumable.** Every row carries a deterministic ``cell_id``; ``run_grid``
-  skips cells already present in the output file, so an interrupted sweep
-  continues where it stopped.
-* **Residency-ordered.** Cells are emitted grouped by model pair, so a local
-  inference server keeps the same one or two models resident instead of
-  reloading weights between cells (which dominates wall-clock time on CPU).
+Judging inline would force three models resident per cell and reload weights on
+every turn; splitting the phases keeps at most two loaded at a time.
+
+Three further properties matter for a sweep that takes hours:
+
+* **Resumable.** Every row carries a deterministic ``cell_id``; each phase skips
+  work already present in its output file, so an interrupted sweep continues.
+* **Residency-ordered.** Cells are emitted grouped by model pair, so the server
+  keeps the same weights loaded across a whole block.
+* **Selectively parallel.** Small models leave CPU headroom, so cells whose
+  combined weights fit ``PairPolicy.parallel_budget_gb`` run concurrently. Cells
+  involving a large model always run alone.
 
 Local weights also impose a memory ceiling: two large models cannot be resident
 at once. ``PairPolicy`` encodes that as a footprint budget, and a pair of the
@@ -24,21 +34,19 @@ agents from it.
 from __future__ import annotations
 
 import json
+import threading
 import time
 import traceback
 from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .disclosure import (
-    build_disclosure_metrics,
-    run_disclosure_judgement,
-    scored_sides,
-)
+from .disclosure import build_disclosure_metrics, run_disclosure_judgement, scored_sides
 from .engine import Agent, Transcript, run_conversation
 from .models import ModelClient, ModelConfig, RetryPolicy, get_client, load_registry
-from .persistence import save_transcript
+from .persistence import load_transcript, save_transcript
 from .prompts import (
     AdversaryStrategy,
     DefenseCondition,
@@ -49,6 +57,7 @@ from .prompts import (
 from .scenarios import Scenario, load_scenario
 
 ClientFactory = Callable[[str], ModelClient]
+DEFAULT_CONVERSATIONS = "results/conversations.jsonl"
 DEFAULT_GRID_RESULTS = "results/grid.jsonl"
 
 # Approximate resident size of each local model, in GB (on-disk weight size is a
@@ -64,10 +73,12 @@ LOCAL_FOOTPRINT_GB: dict[str, float] = {
 
 @dataclass(frozen=True)
 class PairPolicy:
-    """Which (holder_model, seeker_model) pairs may run on this machine."""
+    """Which (holder_model, seeker_model) pairs may run, and which may overlap."""
 
     # Total resident local weights allowed across both agents of one cell.
     footprint_budget_gb: float = 24.0
+    # A cell at or under this footprint is small enough to run alongside others.
+    parallel_budget_gb: float = 6.0
     # Never run two *different* models from this set together, whatever the
     # budget says.
     heavy_models: frozenset[str] = frozenset({"local-qwen-32b"})
@@ -86,6 +97,12 @@ class PairPolicy:
         if used > self.footprint_budget_gb:
             return f"local footprint {used:.1f}GB exceeds budget {self.footprint_budget_gb:.1f}GB"
         return None
+
+    def is_parallelisable(self, holder_model: str, seeker_model: str) -> bool:
+        """True when this cell is small enough to share the machine."""
+        if holder_model in self.heavy_models or seeker_model in self.heavy_models:
+            return False
+        return self.footprint_gb(holder_model, seeker_model) <= self.parallel_budget_gb
 
 
 @dataclass(frozen=True)
@@ -166,11 +183,14 @@ class RunnerConfig:
     timeout_s: float = 900.0
     max_retries: int = 2
     judge_retries: int = 2
+    # Concurrent cells, applied only to cells the policy calls parallelisable.
+    max_workers: int = 1
+    # Concurrent judge requests in phase 2 (one model, several requests).
+    judge_workers: int = 1
     scenarios_dir: str = "scenarios"
     registry_path: str = "models.yaml"
     runs_dir: str = "runs"
     prompt_config: PromptConfig = field(default_factory=PromptConfig)
-    save_transcripts: bool = True
 
 
 def _cost_usd(prompt_tokens: int, completion_tokens: int, config: ModelConfig | None) -> float:
@@ -181,9 +201,9 @@ def _cost_usd(prompt_tokens: int, completion_tokens: int, config: ModelConfig | 
     ) / 1_000_000
 
 
-def completed_cell_ids(path: str | Path) -> set[str]:
-    """Cell ids already recorded in a results file (for resuming)."""
-    out: set[str] = set()
+def _read_rows(path: str | Path) -> list[dict[str, Any]]:
+    """Every well-formed JSON object in a results file (tolerates a torn line)."""
+    out: list[dict[str, Any]] = []
     results = Path(path)
     if not results.is_file():
         return out
@@ -196,18 +216,57 @@ def completed_cell_ids(path: str | Path) -> set[str]:
                 row = json.loads(line)
             except json.JSONDecodeError:
                 continue  # a partially written line from a killed process
-            cell_id = row.get("cell_id")
-            if isinstance(cell_id, str):
-                out.add(cell_id)
+            if isinstance(row, dict):
+                out.append(row)
     return out
 
 
+def completed_cell_ids(path: str | Path) -> set[str]:
+    """Cell ids **successfully** recorded in a results file (for resuming).
+
+    Only ``ok`` rows count. A failed cell must stay on the to-do list: failures
+    are usually transient (the inference server was restarting, a request timed
+    out), and treating them as done would let one outage silently punch
+    permanent holes in the grid that no re-run could fill.
+    """
+    return {
+        row["cell_id"]
+        for row in _read_rows(path)
+        if isinstance(row.get("cell_id"), str) and row.get("ok")
+    }
+
+
+def completed_judgements(path: str | Path) -> set[tuple[str, str]]:
+    """(cell_id, scored_side) pairs already judged. Only ``ok`` rows count, for
+    the same reason as ``completed_cell_ids``."""
+    return {
+        (row["cell_id"], row["scored_side"])
+        for row in _read_rows(path)
+        if isinstance(row.get("cell_id"), str)
+        and isinstance(row.get("scored_side"), str)
+        and row.get("ok")
+    }
+
+
+class _RowWriter:
+    """Append-only JSONL writer safe to call from several worker threads."""
+
+    def __init__(self, path: str | Path) -> None:
+        self._path = Path(path)
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
+
+    def write(self, rows: list[dict[str, Any]]) -> None:
+        if not rows:
+            return
+        payload = "".join(json.dumps(row) + "\n" for row in rows)
+        with self._lock, self._path.open("a", encoding="utf-8") as handle:
+            handle.write(payload)
+            handle.flush()
+
+
 def append_rows(rows: list[dict[str, Any]], path: str | Path) -> None:
-    out = Path(path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    with out.open("a", encoding="utf-8") as handle:
-        for row in rows:
-            handle.write(json.dumps(row) + "\n")
+    _RowWriter(path).write(rows)
 
 
 def _transcript_totals(transcript: Transcript, registry: dict[str, ModelConfig]) -> dict[str, Any]:
@@ -228,19 +287,21 @@ def _transcript_totals(transcript: Transcript, registry: dict[str, ModelConfig])
     }
 
 
-def run_cell(
+# --- phase 1: conversations -------------------------------------------------
+
+
+def run_conversation_cell(
     cell: Cell,
     scenario: Scenario,
     config: RunnerConfig,
     *,
     client_factory: ClientFactory,
-    judge_client: ModelClient,
     registry: dict[str, ModelConfig],
-) -> list[dict[str, Any]]:
-    """Execute one cell and return one row per scored side.
+) -> dict[str, Any]:
+    """Execute one cell's conversation and return its row.
 
-    Never raises: a failed conversation or judge produces a row carrying the
-    error, so a long sweep is not derailed by one bad cell.
+    Never raises: a failure produces a row carrying the error, so one bad cell
+    does not derail the sweep.
     """
     base = {
         "cell_id": cell.cell_id,
@@ -262,21 +323,19 @@ def run_cell(
         holder_system, seeker_system = render_pair(
             scenario, cell.defense, cell.adversary, config=config.prompt_config
         )
-        agents = {
-            "holder": Agent(
-                name="holder",
-                system_prompt=holder_system,
-                client=client_factory(cell.holder_model),
-            ),
-            "seeker": Agent(
-                name="seeker",
-                system_prompt=seeker_system,
-                client=client_factory(cell.seeker_model),
-            ),
-        }
+        holder = Agent(
+            name="holder",
+            system_prompt=holder_system,
+            client=client_factory(cell.holder_model),
+        )
+        seeker = Agent(
+            name="seeker",
+            system_prompt=seeker_system,
+            client=client_factory(cell.seeker_model),
+        )
         transcript = run_conversation(
-            agents["holder"],
-            agents["seeker"],
+            holder,
+            seeker,
             max_turns=config.max_turns,
             opening_speaker=opening_speaker(scenario),
             metadata={
@@ -287,56 +346,87 @@ def run_cell(
             },
         )
     except Exception as exc:  # noqa: BLE001 - one bad cell must not kill the sweep
-        return [
-            {
-                **base,
-                "ok": False,
-                "error": f"{type(exc).__name__}: {exc}",
-                "error_stage": "conversation",
-                "duration_s": round(time.time() - started, 1),
-            }
-        ]
+        return {
+            **base,
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "error_stage": "conversation",
+            "duration_s": round(time.time() - started, 1),
+        }
 
-    transcript_path = ""
-    if config.save_transcripts:
-        try:
-            transcript_path = str(save_transcript(transcript, config.runs_dir))
-        except Exception:  # noqa: BLE001 - persistence is not worth losing a run over
-            transcript_path = ""
+    try:
+        transcript_path = str(save_transcript(transcript, config.runs_dir))
+    except Exception as exc:  # noqa: BLE001 - phase 2 reads the file, so this fails the cell
+        return {
+            **base,
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "error_stage": "save",
+            "duration_s": round(time.time() - started, 1),
+        }
 
-    totals = _transcript_totals(transcript, registry)
-    conversation = {
+    return {
         **base,
-        **totals,
+        **_transcript_totals(transcript, registry),
+        "ok": True,
+        "error": "",
         "termination": transcript.termination,
-        "deal_amount": transcript.deal_amount,
         "transcript_path": transcript_path,
         "duration_s": round(time.time() - started, 1),
     }
 
+
+# --- phase 2: judging -------------------------------------------------------
+
+
+def judge_conversation(
+    row: dict[str, Any],
+    scenario: Scenario,
+    config: RunnerConfig,
+    *,
+    judge_client: ModelClient,
+    already: set[tuple[str, str]],
+) -> list[dict[str, Any]]:
+    """Score one recorded conversation, one row per scored side."""
+    cell_id = row["cell_id"]
+    sides = [s for s in scored_sides(scenario) if (cell_id, s) not in already]
+    if not sides:
+        return []
+
+    try:
+        transcript = load_transcript(row["transcript_path"])
+    except Exception as exc:  # noqa: BLE001
+        return [
+            {
+                **row,
+                "ok": False,
+                "error": f"{type(exc).__name__}: {exc}",
+                "error_stage": "load_transcript",
+                "scored_side": side,
+            }
+            for side in sides
+        ]
+
     rows: list[dict[str, Any]] = []
-    for side_name in scored_sides(scenario):
+    for side_name in sides:
         try:
             judgement = run_disclosure_judgement(
-                judge_client,
-                transcript,
-                scenario,
-                side_name,
-                retries=config.judge_retries,
+                judge_client, transcript, scenario, side_name, retries=config.judge_retries
             )
             metrics = build_disclosure_metrics(scenario, side_name, judgement)
             rows.append(
                 {
-                    **conversation,
+                    **row,
                     "ok": True,
                     "error": "",
                     "scored_side": side_name,
                     "scored_model": (
-                        cell.holder_model if side_name == "holder" else cell.seeker_model
+                        row["holder_model"] if side_name == "holder" else row["seeker_model"]
                     ),
                     "opponent_model": (
-                        cell.seeker_model if side_name == "holder" else cell.holder_model
+                        row["seeker_model"] if side_name == "holder" else row["holder_model"]
                     ),
+                    "judge_model": config.judge_model,
                     **metrics.model_dump(exclude={"side"}),
                     "judge_prompt_tokens": judgement.prompt_tokens,
                     "judge_completion_tokens": judgement.completion_tokens,
@@ -345,7 +435,7 @@ def run_cell(
         except Exception as exc:  # noqa: BLE001
             rows.append(
                 {
-                    **conversation,
+                    **row,
                     "ok": False,
                     "error": f"{type(exc).__name__}: {exc}",
                     "error_stage": "judge",
@@ -355,17 +445,75 @@ def run_cell(
     return rows
 
 
+# --- orchestration ----------------------------------------------------------
+
+
+def _label_of(item: Any) -> str:
+    if isinstance(item, dict):
+        return str(item.get("cell_id", ""))
+    return str(getattr(item, "cell_id", ""))
+
+
+def _execute(
+    items: list[Any],
+    work: Callable[[Any], list[dict[str, Any]]],
+    writer: _RowWriter,
+    *,
+    workers: int,
+    label: str,
+    progress: Callable[[str], None],
+) -> int:
+    """Run ``work`` over ``items``, writing rows as each finishes. Returns failures."""
+    total = len(items)
+    if not total:
+        return 0
+    started = time.time()
+    done = 0
+    failures = 0
+    lock = threading.Lock()
+
+    def run_one(item: Any) -> None:
+        nonlocal done, failures
+        item_started = time.time()
+        try:
+            rows = work(item)
+        except Exception:  # noqa: BLE001 - defensive; work() already guards
+            rows = [{"ok": False, "error": traceback.format_exc(limit=3), "error_stage": "runner"}]
+        writer.write(rows)
+        bad = sum(1 for r in rows if not r.get("ok"))
+        with lock:
+            done += 1
+            failures += bad
+            elapsed = time.time() - started
+            eta = (elapsed / done) * (total - done) / 60
+            status = "FAIL" if bad else "ok"
+            progress(
+                f"  [{label} {done}/{total}] {status} {_label_of(item)} "
+                f"({time.time() - item_started:.0f}s, eta {eta:.0f}m)"
+            )
+
+    if workers <= 1:
+        for item in items:
+            run_one(item)
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            list(pool.map(run_one, items))
+    return failures
+
+
 def run_grid(
     spec: GridSpec,
     config: RunnerConfig | None = None,
     *,
     policy: PairPolicy | None = None,
+    conversations_path: str | Path = DEFAULT_CONVERSATIONS,
     results_path: str | Path = DEFAULT_GRID_RESULTS,
     client_factory: ClientFactory | None = None,
+    phases: tuple[str, ...] = ("conversations", "judge"),
     resume: bool = True,
     progress: Callable[[str], None] = print,
 ) -> dict[str, Any]:
-    """Execute the whole grid, appending rows as each cell finishes."""
+    """Execute the grid: conversations first, then judging."""
     config = config or RunnerConfig()
     policy = policy or PairPolicy()
     retry = RetryPolicy(timeout_s=config.timeout_s, max_retries=config.max_retries)
@@ -379,62 +527,104 @@ def run_grid(
 
     registry = load_registry(config.registry_path)
     scenarios = {sid: load_scenario(sid, config.scenarios_dir) for sid in spec.scenarios}
-    judge_client = client_factory(config.judge_model)
 
-    for holder, seeker, reason in spec.skipped_pairs(policy):
-        progress(f"  skip pair {holder} vs {seeker}: {reason}")
+    def scenario_for(scenario_id: str) -> Scenario:
+        """Scenarios from the spec, plus any others the recorded conversations
+        reference - the judge phase can run standalone over a file written by a
+        different spec."""
+        if scenario_id not in scenarios:
+            scenarios[scenario_id] = load_scenario(scenario_id, config.scenarios_dir)
+        return scenarios[scenario_id]
 
-    cells = list(spec.cells(policy))
-    done = completed_cell_ids(results_path) if resume else set()
-    todo = [c for c in cells if c.cell_id not in done]
-    progress(
-        f"grid: {len(cells)} cells ({len(spec.pairs(policy))} pairs x "
-        f"{len(spec.scenarios)} scenarios x {len(spec.defenses)} defenses x "
-        f"{len(spec.adversaries)} adversaries); {len(done)} already done, {len(todo)} to run"
-    )
-
+    summary: dict[str, Any] = {"conversations_path": str(conversations_path)}
     started = time.time()
-    failures = 0
-    for i, cell in enumerate(todo, start=1):
-        cell_started = time.time()
-        try:
-            rows = run_cell(
-                cell,
-                scenarios[cell.scenario_id],
-                config,
-                client_factory=client_factory,
-                judge_client=judge_client,
-                registry=registry,
-            )
-        except Exception:  # noqa: BLE001 - defensive; run_cell already guards
-            rows = [
-                {
-                    "cell_id": cell.cell_id,
-                    "ok": False,
-                    "error": traceback.format_exc(limit=3),
-                    "error_stage": "runner",
-                }
-            ]
-        append_rows(rows, results_path)
 
-        bad = sum(1 for r in rows if not r.get("ok"))
-        failures += bad
-        elapsed = time.time() - started
-        rate = elapsed / i
-        remaining = rate * (len(todo) - i)
-        status = "FAIL" if bad else "ok"
+    if "conversations" in phases:
+        for holder, seeker, reason in spec.skipped_pairs(policy):
+            progress(f"  skip pair {holder} vs {seeker}: {reason}")
+
+        cells = list(spec.cells(policy))
+        done = completed_cell_ids(conversations_path) if resume else set()
+        todo = [c for c in cells if c.cell_id not in done]
+        serial = [c for c in todo if not policy.is_parallelisable(c.holder_model, c.seeker_model)]
+        parallel = [c for c in todo if policy.is_parallelisable(c.holder_model, c.seeker_model)]
+
         progress(
-            f"[{i}/{len(todo)}] {status} {cell.cell_id} "
-            f"({time.time() - cell_started:.0f}s, eta {remaining / 60:.0f}m)"
+            f"phase 1 (conversations): {len(cells)} cells "
+            f"({len(spec.pairs(policy))} pairs x {len(spec.scenarios)} scenarios x "
+            f"{len(spec.defenses)} defenses x {len(spec.adversaries)} adversaries); "
+            f"{len(done)} done, {len(todo)} to run "
+            f"({len(parallel)} parallelisable at {config.max_workers} workers, "
+            f"{len(serial)} serial)"
         )
 
-    return {
-        "cells_total": len(cells),
-        "cells_run": len(todo),
-        "rows_failed": failures,
-        "elapsed_s": round(time.time() - started, 1),
-        "results_path": str(results_path),
-    }
+        writer = _RowWriter(conversations_path)
+
+        def one_cell(cell: Cell) -> list[dict[str, Any]]:
+            return [
+                run_conversation_cell(
+                    cell,
+                    scenario_for(cell.scenario_id),
+                    config,
+                    client_factory=client_factory,
+                    registry=registry,
+                )
+            ]
+
+        failures = _execute(serial, one_cell, writer, workers=1, label="conv", progress=progress)
+        failures += _execute(
+            parallel,
+            one_cell,
+            writer,
+            workers=config.max_workers,
+            label="conv",
+            progress=progress,
+        )
+        summary["conversations_run"] = len(todo)
+        summary["conversations_failed"] = failures
+
+    if "judge" in phases:
+        rows = [r for r in _read_rows(conversations_path) if r.get("ok")]
+        already = completed_judgements(results_path) if resume else set()
+        pending = [
+            r
+            for r in rows
+            if any(
+                (r["cell_id"], s) not in already
+                for s in scored_sides(scenario_for(r["scenario_id"]))
+            )
+        ]
+        progress(
+            f"phase 2 (judging with {config.judge_model}): "
+            f"{len(rows)} conversations, {len(pending)} still to score"
+        )
+
+        judge_client = client_factory(config.judge_model)
+        writer = _RowWriter(results_path)
+
+        def one_judgement(row: dict[str, Any]) -> list[dict[str, Any]]:
+            return judge_conversation(
+                row,
+                scenario_for(row["scenario_id"]),
+                config,
+                judge_client=judge_client,
+                already=already,
+            )
+
+        failures = _execute(
+            pending,
+            one_judgement,
+            writer,
+            workers=config.judge_workers,
+            label="judge",
+            progress=progress,
+        )
+        summary["judged"] = len(pending)
+        summary["judgements_failed"] = failures
+        summary["results_path"] = str(results_path)
+
+    summary["elapsed_s"] = round(time.time() - started, 1)
+    return summary
 
 
 def _csv(value: str) -> list[str]:
@@ -459,19 +649,35 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--judge-model", default="local-qwen-14b")
     parser.add_argument("--max-turns", type=int, default=8)
     parser.add_argument("--timeout-s", type=float, default=900.0)
+    parser.add_argument(
+        "--max-workers", type=int, default=1, help="concurrent cells among small-model pairs"
+    )
+    parser.add_argument("--judge-workers", type=int, default=1)
+    parser.add_argument("--conversations", default=DEFAULT_CONVERSATIONS)
     parser.add_argument("--results", default=DEFAULT_GRID_RESULTS)
     parser.add_argument("--runs-dir", default="runs")
     parser.add_argument("--scenarios-dir", default="scenarios")
     parser.add_argument("--registry", default="models.yaml")
+    parser.add_argument(
+        "--phase",
+        default="all",
+        choices=["all", "conversations", "judge"],
+        help="run only one phase (default: both)",
+    )
     parser.add_argument(
         "--footprint-budget-gb",
         type=float,
         default=24.0,
         help="max resident local weights across both agents of one cell",
     )
+    parser.add_argument(
+        "--parallel-budget-gb",
+        type=float,
+        default=6.0,
+        help="cells at or under this footprint may run concurrently",
+    )
     parser.add_argument("--no-self-play", action="store_true")
     parser.add_argument("--no-resume", action="store_true")
-    parser.add_argument("--no-save-transcripts", action="store_true")
     parser.add_argument("--enable-authority-verifiable", action="store_true")
     parser.add_argument(
         "--dry-run", action="store_true", help="list the cells that would run, then exit"
@@ -485,34 +691,45 @@ def main(argv: list[str] | None = None) -> int:
         adversaries=[AdversaryStrategy(a) for a in _csv(args.adversaries)],
         include_self_play=not args.no_self_play,
     )
-    policy = PairPolicy(footprint_budget_gb=args.footprint_budget_gb)
+    policy = PairPolicy(
+        footprint_budget_gb=args.footprint_budget_gb,
+        parallel_budget_gb=args.parallel_budget_gb,
+    )
     config = RunnerConfig(
         max_turns=args.max_turns,
         judge_model=args.judge_model,
         timeout_s=args.timeout_s,
+        max_workers=args.max_workers,
+        judge_workers=args.judge_workers,
         scenarios_dir=args.scenarios_dir,
         registry_path=args.registry,
         runs_dir=args.runs_dir,
         prompt_config=PromptConfig(enable_authority_verifiable=args.enable_authority_verifiable),
-        save_transcripts=not args.no_save_transcripts,
     )
 
     if args.dry_run:
         for holder, seeker, reason in spec.skipped_pairs(policy):
             print(f"skip pair {holder} vs {seeker}: {reason}")
         cells = list(spec.cells(policy))
-        done = set() if args.no_resume else completed_cell_ids(args.results)
+        done = set() if args.no_resume else completed_cell_ids(args.conversations)
+        n_par = sum(1 for c in cells if policy.is_parallelisable(c.holder_model, c.seeker_model))
         for cell in cells:
             mark = "done" if cell.cell_id in done else "todo"
-            print(f"{mark}  {cell.cell_id}")
-        print(f"\n{len(cells)} cells, {len(cells) - len(done & {c.cell_id for c in cells})} to run")
+            lane = (
+                "par" if policy.is_parallelisable(cell.holder_model, cell.seeker_model) else "ser"
+            )
+            print(f"{mark} {lane}  {cell.cell_id}")
+        print(f"\n{len(cells)} cells ({n_par} parallelisable), {len(cells) - len(done)} to run")
         return 0
 
+    phases = ("conversations", "judge") if args.phase == "all" else (args.phase,)
     summary = run_grid(
         spec,
         config,
         policy=policy,
+        conversations_path=args.conversations,
         results_path=args.results,
+        phases=phases,
         resume=not args.no_resume,
     )
     print(json.dumps(summary, indent=2))

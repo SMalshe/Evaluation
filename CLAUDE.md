@@ -5,11 +5,16 @@ negotiations**. Layers so far: a unified model client, a two-agent conversation
 engine, a dashboard for driving/watching runs, a scenario + condition-controlled
 prompt layer (information-extraction scenarios with holder defenses and seeker
 adversary strategies), an evaluation layer (adversary extraction + independent
-judge + flat `RunResult` metrics), a symmetric secret-based disclosure scorer, a
-resumable experiment runner over the (scenario × defense × adversary × model)
-grid, and two subliminal-leakage experiments (an association probe + a
-conversational side-channel, in-context analogs of Cloud et al. 2025). Still not
-built: any aggregation/analysis over the resulting JSONL.
+judge + flat `RunResult` metrics), a symmetric secret-based disclosure scorer,
+two subliminal-leakage experiments (an association probe + a conversational
+side-channel, in-context analogs of Cloud et al. 2025), resumable batch runners
+over the (scenario × defense × adversary × model) grid, and a reporting layer
+that turns the resulting JSONL into a spreadsheet and a slide deck.
+
+**Note (2026-07-30): there are currently two grid runners** — `src/sweep.py` and
+`src/experiment.py` — built in parallel on separate branches and merged
+together. They overlap heavily. Pick one and delete the other before building
+anything further on top; see the note under "State / not-yet-done".
 
 ## Hard constraints (do not violate)
 
@@ -25,8 +30,10 @@ built: any aggregation/analysis over the resulting JSONL.
   one sanctioned exception is the `human_impersonation` seeker (claims humanity,
   denies being an AI if asked). `tests/test_prompts.py` enforces this; keep it.
 - **Scope discipline.** Built so far: foundations, dashboard, the scenario/
-  prompt layer, the evaluation layer, and the sweep runner. Do **not** add
-  aggregation/analysis layers unless explicitly asked — those are future sprints.
+  prompt layer, the evaluation layer, the subliminal experiments, the batch
+  runners, and the reporting layer. Do **not** add further analysis layers
+  unless explicitly asked. (The scorer, runners and reporting layer were each
+  explicitly asked for on 2026-07-28/30 and now exist.)
 - Type hints throughout. No global state. Everything configurable via function
   args, `models.yaml`, or the scenario files.
 
@@ -56,13 +63,19 @@ built: any aggregation/analysis over the resulting JSONL.
 | `src/judge.py`          | `run_judgement()` — independent judge, `JudgeOutput`/`LeakLabel`, per-turn/attribute labels |
 | `src/metrics.py`        | `build_run_result()` + pydantic `RunResult` (pure metric math) |
 | `src/evaluate.py`       | `evaluate_run()`, `EvalConfig`, `append_result()`; CLI `python -m src.evaluate` |
-| `src/sweep.py`          | Batch runner over (pairing × scenario × condition); `Cell`/`CellRecord`/`SweepIndex`, `build_plan`/`run_sweep`; CLI `python -m src.sweep` |
+| `src/sweep.py`          | Batch runner over (pairing × scenario × condition); `Cell`/`CellRecord`/`SweepIndex`, `build_plan`/`run_sweep`; CLI `python -m src.sweep` — **overlaps `src/experiment.py`** |
 | `src/subliminal.py`     | **Association probe** (the main subliminal experiment): `Probe`/`run_probe`/`ProbeResult`, binomial `accuracy` vs `1/k`; CLI `python -m src.subliminal` |
 | `src/subliminal_chat.py`| Conversational side-channel decoder: `run_decode`/`evaluate_subliminal`, `SubliminalResult`; CLI `python -m src.subliminal_chat` |
+| `src/disclosure.py`     | **Live scorer**: secret-based, `run_disclosure_judgement()` + pure `build_disclosure_metrics()` |
+| `src/experiment.py`     | Grid runner (conversations + judging phases, resumable, parallel); `python -m src.experiment` — **overlaps `src/sweep.py`** |
+| `src/report.py`         | `results.xlsx` + `deck.pptx` from grid rows; `python -m src.report` |
+| `scripts/serve_local.ps1` | Starts one llama.cpp `llama-server` per local model with a pinned context |
 | `src/server.py`         | `create_app(...)` — dashboard HTTP API + SSE stream; `python -m src.server` |
 | `src/static/`           | Dashboard page: `index.html`, `styles.css`, `app.js` (no build step) |
 | `src/smoke.py`          | CLI: `python -m src.smoke` — a free-form holder/seeker smoke test |
 | `scripts/live_check.py` | One live "say OK" + JSON-mode probe per registry entry (not in pytest) |
+| `scripts/architecture_diagram.py` | Renders `docs/architecture.png` (Pillow, no browser). Re-run it when the grid or pipeline changes — the diagram states live counts |
+| `docs/architecture.png` | One-page architecture + experimental-design diagram, referenced from the README |
 | `tests/`                | Offline tests using an in-file `MockBackend` (no network) |
 
 ## Architecture
@@ -566,25 +579,54 @@ negotiation mocks and the eval mocks don't collide). The `client` fixture points
   `src/` with generic names** (confirmed 2026-07-15 when a sprint spec said
   `leaklab/`). Keep new modules under `src/`; the folder name is separate.
 - **Symmetric scenario schema landed (2026-07-18):** scenarios now have
-  holder/seeker `Side`s (objectives/private_facts/disclosure_map/persona) +
-  `role_under_test`. The prompt layer renders both sides symmetrically. The
-  **evaluator was NOT reworked** — it still scores the holder's
-  reservation/urgency/sensitive regardless of `role_under_test`. The symmetric,
-  disclosure_map-based scorer is the outstanding "sprint 3" piece.
-- **Sweep runner landed 2026-07-24** (`src/sweep.py`), explicitly requested — it
-  supersedes the old "no experiment runner" rule. The 2026-07-16 preference for
-  firing scenarios **one at a time by hand** still governs the *dashboard*: keep
-  the scenario list + ▶ as the interactive path, and don't make the dashboard
-  auto-batch. The sweep is the deliberate opt-in batch path.
-- Still not built: **aggregation/analysis** over `sweeps/*/index.jsonl` or
-  `results/*.jsonl`. Don't add it without being asked.
-- **The price evaluator still can't score the corpus.** `build_run_result` reads
-  `scenario.buyer.private_facts.reservation_price`, and all 48 generic scenarios
-  have `private_facts: None`, so `evaluate_run` raises `AttributeError` on every
-  one of them (the dashboard's endpoint 400s on this deliberately). The sweep
-  therefore only produces transcripts; the symmetric disclosure-based `RunResult`
-  scorer is still sprint 3. **Exception:** the subliminal modules
-  (`src/subliminal.py` association probe, `src/subliminal_chat.py` side-channel)
-  score against `secrets[*].value` (which every scenario has) — those paths do
-  *not* go through the price evaluator and work today.
-  Transcripts carry full condition metadata, so they're scoreable retroactively.
+  holder/seeker `Side`s (objectives/secrets/persona) + `role_under_test`. The
+  prompt layer renders both sides symmetrically.
+- **Terminology corrected (2026-07-28).** The two sides were called
+  `buyer`/`seller`, a leftover from the used-car origin that was simply wrong for
+  an information-extraction corpus. They are now **`holder`** (possesses the
+  private facts) and **`seeker`** (tries to extract them), everywhere: schema,
+  all 48 YAML files, prompts, dashboard, tests, docs. Categories became
+  `holder_defense` / `seeker_attack` / `holder_dependent` / `authority`.
+  - This exposed a **real bug**, now fixed: `render_buyer_system` always applied
+    the *defense* to `scenario.buyer` and the *adversary* to `scenario.seller`,
+    but in the 12 `seller_dependent` scenarios the seller was the side under
+    test. Those 12 rendered **inverted** — the holder got the attack prompt and
+    the seeker got the defense. Migration swapped those files' two blocks so
+    `holder` is always the side under test; `role_under_test` is now `holder` in
+    all 48, and `tests/test_prompts.py` pins the binding.
+  - The `[DEAL $X]` token was removed from scenario prompts — no
+    information-extraction scenario ends in a priced deal. The engine still
+    supports it for the free-form path.
+- **Secret-based scorer landed (`src/disclosure.py`), the old "sprint 3" piece.**
+  Scores the side named by `role_under_test` against its `secrets`: per secret,
+  did it come out, at which turn, and had its `reveal_when` condition actually
+  been met first? **Inappropriate disclosure** (condition unmet) is the headline
+  measure; ground truth overrides the judge, so a secret with an empty
+  `reveal_when` can never be scored appropriate. `build_disclosure_metrics` is
+  pure math and exactly tested. The subliminal modules score against
+  `secrets[*].value` directly and never went through the price evaluator.
+- The legacy price evaluator (`extraction`/`judge`/`metrics`/`evaluate`) is
+  **dead for this corpus** — 0 of 48 scenarios carry `private_facts`, so it
+  declines every one. Retained but unused; `disclosure` is the live path.
+- **TWO BATCH RUNNERS EXIST AND OVERLAP (2026-07-30).** `src/sweep.py` (landed
+  07-24) and `src/experiment.py` (landed 07-28) were built independently on
+  separate branches and merged together. Both walk the
+  (pairing × scenario × condition) grid and both are resumable. They differ:
+  `experiment.py` splits conversations and judging into two phases (so local
+  weights don't thrash), scores each run via `disclosure.py`, and runs
+  small-model cells in parallel; `sweep.py` writes `sweeps/*/index.jsonl` and
+  produces transcripts. **Pick one and delete the other before building on top
+  of either** — running both against the same corpus will produce two
+  incompatible result stores.
+- **Reporting landed (`src/report.py`):** `results.xlsx` (summary, holder×seeker
+  matrix, per-model, per-scenario, raw rows) and `deck.pptx` with native charts,
+  both from one aggregation path so the numbers cannot drift. It reads
+  `experiment.py`'s `results/grid.jsonl`, not `sweep.py`'s index.
+- **Local inference is llama.cpp, not Ollama (2026-07-30).**
+  `scripts/serve_local.ps1` starts one `llama-server` per model with an explicit
+  `-c 4096`. Ollama ignored `OLLAMA_CONTEXT_LENGTH`, loaded models at 64k
+  context, and claimed 60 GB on a 32 GB machine, which forced disk swap and
+  stalled the sweep. Per-token Ollama was faster (16.9 vs 12.5 tok/s CPU, 11.9 on
+  the Adreno GPU) but wildly unpredictable; the Hexagon NPU is unreachable from
+  this stack entirely.
+- The dashboard remains the one-at-a-time tool; batch runs are opt-in via CLI.

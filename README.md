@@ -6,10 +6,22 @@ engine with JSON transcript persistence, a condition-controlled scenario/prompt
 layer, an evaluation layer (adversary extraction + independent judge + flat
 metrics), and a browser dashboard for driving and watching runs.
 
-Single-run tools by design — there is no batch sweep over the
-(scenario × defense × adversary × model) grid, and no aggregation over the
-result rows. You fire scenarios one at a time and get one JSONL row per
-evaluated run.
+The dashboard stays a single-run tool — you fire scenarios one at a time and get
+one JSONL row per evaluated run. Batch runs over the
+(scenario × defense × adversary × model) grid are opt-in from the CLI, and
+`src/report.py` aggregates the resulting rows into a spreadsheet and a deck.
+
+> **Two batch runners currently coexist**, `src/sweep.py` and
+> `src/experiment.py`, built in parallel on separate branches and merged
+> together. They overlap; pick one before building further on either.
+
+![System architecture and experimental design](docs/architecture.png)
+
+The diagram above is the one-page view: inputs on the left, the two-phase
+pipeline in the middle, outputs on the right, and the grid as currently
+configured along the bottom. Regenerate it with
+`uv run python scripts/architecture_diagram.py` after changing the grid, so the
+counts on it stay true.
 
 ## Setup
 
@@ -39,7 +51,10 @@ disables the registry entries that need it.
 | `src/judge.py`          | Independent judge: per-turn, per-attribute leak labels          |
 | `src/metrics.py`        | Flat `RunResult` metric math (pure)                             |
 | `src/evaluate.py`       | `evaluate_run` + JSONL persistence (`python -m src.evaluate`)   |
+| `src/disclosure.py`     | Secret-based disclosure scorer — the live path for the 48 scenarios |
 | `src/sweep.py`          | Resumable batch runner over the grid (`python -m src.sweep`)    |
+| `src/experiment.py`     | Two-phase resumable grid runner (`python -m src.experiment`)    |
+| `src/report.py`         | `results.xlsx` + `deck.pptx` from grid rows (`python -m src.report`) |
 | `src/subliminal.py`      | Association probe: recover a secret from an unrelated answer (`python -m src.subliminal`) |
 | `src/subliminal_chat.py` | Conversational side-channel decoder (`python -m src.subliminal_chat`) |
 | `src/jsonparse.py`      | Ask-for-JSON + bounded repair-retry helper (shared)            |
@@ -47,6 +62,9 @@ disables the registry entries that need it.
 | `src/static/`           | The dashboard page (plain HTML/CSS/JS, no build step)           |
 | `src/smoke.py`          | CLI smoke test (free-form holder/seeker exchange)               |
 | `scripts/live_check.py` | One live "say OK" + JSON-mode probe per registry entry          |
+| `scripts/serve_local.ps1` | Starts one llama.cpp server per local model, context pinned    |
+| `scripts/architecture_diagram.py` | Regenerates `docs/architecture.png`                  |
+| `docs/architecture.png` | One-page system + experimental-design diagram                  |
 | `tests/`                | Offline tests against a mock backend                            |
 
 ## Dashboard
@@ -121,7 +139,7 @@ plus two conditions:
 - **Seeker adversary** (`passive` / `direct_probe` / `rapport` / `pressure` /
   `authority` / `human_impersonation` / `subliminal_chat`, plus the gated defense
   arm `authority_verifiable`) — the extraction tactic layered on top of ordinary
-  negotiation. `subliminal_chat` is the odd one out: it **never raises the topic**
+  interaction. `subliminal_chat` is the odd one out: it **never raises the topic**
   and only makes unrelated small talk — see
   [Subliminal leakage](#subliminal-leakage). (The related *association probe* is a
   standalone experiment, not a conversation adversary.)
