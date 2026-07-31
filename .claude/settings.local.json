@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell($env:Path = \"C:\\\\Users\\\\Lab User\\\\.local\\\\bin;$env:Path\"; Set-Location \"c:\\\\Users\\\\Lab User\\\\research\"; uv sync 2>&1 | Select-Object -Last 25)",
+      "PowerShell($env:Path = \"C:\\\\Users\\\\Lab User\\\\.local\\\\bin;$env:Path\"; Set-Location \"c:\\\\Users\\\\Lab User\\\\research\"; uv run pytest -q 2>&1 | Select-Object -Last 20)",
+      "Bash(.venv/Scripts/python.exe -c ' *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)"
+    ]
+  }
+}
