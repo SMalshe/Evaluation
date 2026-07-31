@@ -251,5 +251,46 @@ def test_a_failing_cell_is_recorded_and_the_sweep_continues(tmp_path: Path) -> N
 
 def test_completed_cell_ids_tolerates_a_truncated_line(tmp_path: Path) -> None:
     results = tmp_path / "grid.jsonl"
-    results.write_text('{"cell_id": "a|none|passive|x|y"}\n{"cell_id": "trunc"\n', encoding="utf-8")
+    results.write_text(
+        '{"cell_id": "a|none|passive|x|y", "ok": true}\n{"cell_id": "trunc"\n', encoding="utf-8"
+    )
     assert completed_cell_ids(results) == {"a|none|passive|x|y"}
+
+
+def test_failed_cells_are_not_treated_as_done(tmp_path: Path) -> None:
+    """A transient outage must not punch a permanent hole in the grid: only
+    successful cells count as complete, so a re-run retries the failures."""
+    results = tmp_path / "conversations.jsonl"
+    results.write_text(
+        '{"cell_id": "good", "ok": true}\n'
+        '{"cell_id": "bad", "ok": false, "error": "APIConnectionError"}\n',
+        encoding="utf-8",
+    )
+    assert completed_cell_ids(results) == {"good"}
+
+
+def test_a_retried_cell_is_rerun_and_then_settles(tmp_path: Path) -> None:
+    conversations = tmp_path / "conversations.jsonl"
+    spec = GridSpec(models=["m1"], scenarios=["s01"])
+    config = make_config(tmp_path)
+    kwargs = dict(
+        conversations_path=conversations,
+        results_path=tmp_path / "grid.jsonl",
+        phases=("conversations",),
+        progress=lambda _m: None,
+    )
+
+    def broken(name: str) -> ModelClient:
+        raise RuntimeError("server down")
+
+    first = run_grid(spec, config, client_factory=broken, **kwargs)
+    assert first["conversations_failed"] == 1
+
+    # The server comes back: the same cell must be attempted again.
+    second = run_grid(spec, config, client_factory=factory, **kwargs)
+    assert second["conversations_run"] == 1
+    assert second["conversations_failed"] == 0
+
+    # Now that it succeeded, a further run leaves it alone.
+    third = run_grid(spec, config, client_factory=factory, **kwargs)
+    assert third["conversations_run"] == 0

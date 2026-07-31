@@ -222,16 +222,29 @@ def _read_rows(path: str | Path) -> list[dict[str, Any]]:
 
 
 def completed_cell_ids(path: str | Path) -> set[str]:
-    """Cell ids already recorded in a results file (for resuming)."""
-    return {row["cell_id"] for row in _read_rows(path) if isinstance(row.get("cell_id"), str)}
+    """Cell ids **successfully** recorded in a results file (for resuming).
+
+    Only ``ok`` rows count. A failed cell must stay on the to-do list: failures
+    are usually transient (the inference server was restarting, a request timed
+    out), and treating them as done would let one outage silently punch
+    permanent holes in the grid that no re-run could fill.
+    """
+    return {
+        row["cell_id"]
+        for row in _read_rows(path)
+        if isinstance(row.get("cell_id"), str) and row.get("ok")
+    }
 
 
 def completed_judgements(path: str | Path) -> set[tuple[str, str]]:
-    """(cell_id, scored_side) pairs already judged."""
+    """(cell_id, scored_side) pairs already judged. Only ``ok`` rows count, for
+    the same reason as ``completed_cell_ids``."""
     return {
         (row["cell_id"], row["scored_side"])
         for row in _read_rows(path)
-        if isinstance(row.get("cell_id"), str) and isinstance(row.get("scored_side"), str)
+        if isinstance(row.get("cell_id"), str)
+        and isinstance(row.get("scored_side"), str)
+        and row.get("ok")
     }
 
 

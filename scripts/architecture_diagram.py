@@ -95,8 +95,7 @@ text((C1X + 26, y), "48 scenarios", BOLD(27))
 y = para(
     C1X + 26,
     y + 38,
-    "YAML ground truth. Each has a holder with secrets, "
-    "a seeker, and a category.",
+    "YAML ground truth. Each has a holder with secrets, a seeker, and a category.",
     REG(20),
     C1W - 52,
 )
@@ -115,7 +114,7 @@ text((C1X + 26, y), "models.yaml", BOLD(27))
 y = para(
     C1X + 26,
     y + 38,
-    "15 entries. 5 local (Ollama, no key) and 10 hosted "
+    "14 entries. 4 local (llama.cpp servers, no key) and 10 hosted "
     "(Anthropic / OpenAI / Gemini / Groq).",
     REG(20),
     C1W - 52,
@@ -215,9 +214,7 @@ text((C3X + 26, TOP + 22), "OUTPUTS", SEMI(19), MUTED)
 
 y = TOP + 62
 text((C3X + 26, y), "grid.jsonl", BOLD(27))
-y = para(
-    C3X + 26, y + 38, "One row per scored side, resumable by cell_id.", REG(20), C3W - 52
-)
+y = para(C3X + 26, y + 38, "One row per scored side, resumable by cell_id.", REG(20), C3W - 52)
 y += 18
 text((C3X + 26, y), "results.xlsx", BOLD(27))
 y += 38
@@ -251,18 +248,24 @@ CARD_H = 132
 CARD_W = 336
 GAP = 24
 cards = [
-    ("5", "local models", "32B \u00b7 14B \u00b7 8B \u00b7 3B \u00b7 1B, all on CPU", BLUE),
-    ("23", "ordered pairs", "every model as holder \u00d7 every model as seeker", BLUE),
-    ("4", "scenarios", "one per category, held at one defense + one adversary", AQUA),
-    ("92", "cells", "one conversation each; 6 turns max", AQUA),
-    ("2", "pairs excluded", "32B+14B would exceed 32 GB of RAM", ORANGE),
+    (
+        "4",
+        "local models",
+        "14B \u00b7 8B \u00b7 3B \u00b7 1B on CPU; 32B dropped, ~10\u00d7 slower",
+        BLUE,
+    ),
+    ("16", "ordered pairs", "every model as holder \u00d7 every model as seeker", BLUE),
+    ("4", "scenarios", "one per category, at one defense + one adversary", AQUA),
+    ("64", "cells", "one conversation each; 6 turns max", AQUA),
+    ("0.13", "mean rate", "secrets disclosed with their condition unmet", ORANGE),
 ]
 for i, (big, label, note, colour) in enumerate(cards):
     x = 60 + i * (CARD_W + GAP)
+    size = 52 if len(big) < 4 else 38  # "0.13" needs to fit beside its label
     box(x, CARD_Y, CARD_W, CARD_H, "#FFFFFF", RULE)
     d.rounded_rectangle([x, CARD_Y, x + 6, CARD_Y + CARD_H], radius=3, fill=colour)
-    text((x + 28, CARD_Y + 18), big, BOLD(52), INK)
-    text((x + 28 + d.textlength(big, font=BOLD(52)) + 14, CARD_Y + 46), label, SEMI(22), INK2)
+    text((x + 28, CARD_Y + 18), big, BOLD(size), INK)
+    text((x + 28 + d.textlength(big, font=BOLD(size)) + 14, CARD_Y + 46), label, SEMI(22), INK2)
     para(x + 28, CARD_Y + 84, note, REG(18), CARD_W - 56, MUTED, lh=23)
 
 # footer note

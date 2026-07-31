@@ -83,8 +83,23 @@ class Aggregates:
     totals: dict[str, Any] = field(default_factory=dict)
 
 
+def deduplicate(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One row per (cell_id, scored_side), keeping the most recent.
+
+    A cell can legitimately appear more than once: if a run failed and was
+    retried, the retry produced a second transcript, and each transcript was
+    judged separately. Counting both would silently give the retried cells extra
+    weight in every average, so the latest attempt wins.
+    """
+    latest: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in rows:
+        key = (row.get("cell_id", ""), row.get("scored_side", ""))
+        latest[key] = row  # later lines overwrite earlier ones
+    return list(latest.values())
+
+
 def aggregate(scored: list[dict[str, Any]], conversations: list[dict[str, Any]]) -> Aggregates:
-    ok = [r for r in scored if r.get("ok") and r.get("judge_valid")]
+    ok = deduplicate([r for r in scored if r.get("ok") and r.get("judge_valid")])
     agg = Aggregates(scored=scored, conversations=conversations)
 
     agg.holder_models = sorted({r["holder_model"] for r in ok})
@@ -129,24 +144,35 @@ def aggregate(scored: list[dict[str, Any]], conversations: list[dict[str, Any]])
         entry["category"] = rows[0]["category"]
         agg.by_scenario[scenario_id] = entry
 
-    terminations: dict[str, int] = defaultdict(int)
+    # Conversations need the same treatment as scored rows: keep one attempt per
+    # cell (the latest), and count outcomes only over attempts that succeeded -
+    # otherwise a retried cell is counted twice and every failed attempt shows up
+    # as an "error" termination that never happened in a real conversation.
+    latest_conv: dict[str, dict[str, Any]] = {}
     for row in conversations:
-        terminations[str(row.get("termination", "error"))] += 1
+        latest_conv[row.get("cell_id", "")] = row
+    conv = list(latest_conv.values())
+    conv_ok = [r for r in conv if r.get("ok")]
+
+    terminations: dict[str, int] = defaultdict(int)
+    for row in conv_ok:
+        terminations[str(row.get("termination", "unknown"))] += 1
 
     agg.totals = {
-        "conversations": len(conversations),
-        "conversations_failed": sum(1 for r in conversations if not r.get("ok")),
+        "conversations": len(conv_ok),
+        "conversations_failed": sum(1 for r in conv if not r.get("ok")),
+        "conversation_attempts": len(conversations),
         "scored_rows": len(scored),
         "scored_usable": len(ok),
         "judge_invalid": sum(1 for r in scored if r.get("ok") and not r.get("judge_valid")),
         "models": len(agg.holder_models),
         "pairs": len({(r["holder_model"], r["seeker_model"]) for r in ok}),
         "scenarios": len(agg.by_scenario),
-        "turns": sum(r.get("n_turns", 0) for r in conversations),
-        "prompt_tokens": sum(r.get("prompt_tokens", 0) for r in conversations),
-        "completion_tokens": sum(r.get("completion_tokens", 0) for r in conversations),
-        "cost_usd": round(sum(r.get("cost_usd", 0.0) for r in conversations), 4),
-        "wall_clock_h": round(sum(r.get("duration_s", 0.0) for r in conversations) / 3600, 2),
+        "turns": sum(r.get("n_turns", 0) for r in conv_ok),
+        "prompt_tokens": sum(r.get("prompt_tokens", 0) for r in conv_ok),
+        "completion_tokens": sum(r.get("completion_tokens", 0) for r in conv_ok),
+        "cost_usd": round(sum(r.get("cost_usd", 0.0) for r in conv_ok), 4),
+        "wall_clock_h": round(sum(r.get("duration_s", 0.0) for r in conv_ok) / 3600, 2),
         "terminations": dict(terminations),
         "overall_inappropriate_rate": _mean([r[PRIMARY_METRIC] for r in ok]),
     }
