@@ -17,12 +17,25 @@ CROSS_MODEL ?= claude-sonnet
 PROBE ?= book_trips
 HOLDER_MODEL ?= local-llama-3b
 N ?= 15
+# --- grid runner knobs -------------------------------------------------------
+# GRID_* drive the local/default grid. CLOUD_* are the hosted preset used by
+# `make cloud-grid`, which needs no local inference server at all.
 GRID_MODELS ?= local-llama-3b,local-llama-8b
 GRID_SCENARIOS ?= s01
+GRID_DEFENSES ?= none
+GRID_ADVERSARIES ?= direct_probe
+JUDGE_MODEL ?= local-qwen-14b
 GRID_ARGS ?=
 
+# One scenario per method category, so all four are represented.
+CLOUD_MODELS ?= claude-sonnet,gpt-mini,gemini-flash,llama-70b
+CLOUD_SCENARIOS ?= s01,s13,s25,s37
+CLOUD_JUDGE ?= claude-sonnet
+RESULTS ?= results/grid.jsonl
+REPORT_OUT ?= reports
+
 .DEFAULT_GOAL := help
-.PHONY: help install run run-cli preview eval subliminal subliminal-chat experiment experiment-plan ping-models test lint format check clean
+.PHONY: help install run run-cli preview eval subliminal subliminal-chat experiment experiment-plan cloud-plan cloud-grid report preflight ping-models test lint format check clean
 
 help: ## List the available targets
 	@grep -hE '^[a-z-]+:.*##' $(MAKEFILE_LIST) \
@@ -56,11 +69,31 @@ subliminal-chat: ## Decode a subliminal_chat transcript (TRANSCRIPT=, SCENARIO=,
 
 experiment-plan: ## Print the grid plan and exit; calls nothing, needs no keys
 	$(RUN) python -m src.experiment --models $(GRID_MODELS) \
-		--scenarios $(GRID_SCENARIOS) --dry-run $(GRID_ARGS)
+		--scenarios $(GRID_SCENARIOS) --defenses $(GRID_DEFENSES) \
+		--adversaries $(GRID_ADVERSARIES) --judge-model $(JUDGE_MODEL) \
+		--dry-run $(GRID_ARGS)
 
 experiment: ## Run the grid (resumable); spends API credit on the hosted pairings
 	$(RUN) python -m src.experiment --models $(GRID_MODELS) \
-		--scenarios $(GRID_SCENARIOS) $(GRID_ARGS)
+		--scenarios $(GRID_SCENARIOS) --defenses $(GRID_DEFENSES) \
+		--adversaries $(GRID_ADVERSARIES) --judge-model $(JUDGE_MODEL) \
+		$(GRID_ARGS)
+
+cloud-plan: ## Dry-run the hosted grid; calls nothing, needs no keys
+	$(MAKE) experiment-plan GRID_MODELS=$(CLOUD_MODELS) \
+		GRID_SCENARIOS=$(CLOUD_SCENARIOS) JUDGE_MODEL=$(CLOUD_JUDGE)
+
+cloud-grid: ## Run the hosted grid with a hosted judge (no local server); spends API credit
+	$(MAKE) experiment GRID_MODELS=$(CLOUD_MODELS) \
+		GRID_SCENARIOS=$(CLOUD_SCENARIOS) JUDGE_MODEL=$(CLOUD_JUDGE)
+
+report: ## Build $(REPORT_OUT)/results.xlsx + deck.pptx from the grid rows; offline
+	$(RUN) python -m src.report --results $(RESULTS) --outdir $(REPORT_OUT)
+
+preflight: ## Check keys + that every CLOUD_MODELS entry answers; spends a fraction of a cent
+	$(RUN) python -m src.experiment --models $(CLOUD_MODELS) \
+		--scenarios $(CLOUD_SCENARIOS) --judge-model $(CLOUD_JUDGE) --dry-run
+	$(RUN) python scripts/live_check.py
 
 ping-models: ## Probe every registry entry with one tiny live call; spends API credit
 	$(RUN) python scripts/live_check.py
