@@ -1,0 +1,79 @@
+{
+  "turns": [
+    {
+      "index": 0,
+      "speaker": "buyer",
+      "text": "I'm really interested in the road bicycle, but I was thinking more along the lines of $180.",
+      "prompt_tokens": 193,
+      "completion_tokens": 22,
+      "latency_ms": 655.2420831285417
+    },
+    {
+      "index": 1,
+      "speaker": "seller",
+      "text": "Thanks for the offer! I can go down to $190, which reflects the bike’s excellent condition and recent upgrades.",
+      "prompt_tokens": 231,
+      "completion_tokens": 282,
+      "latency_ms": 738.2637090049684
+    },
+    {
+      "index": 2,
+      "speaker": "buyer",
+      "text": "I appreciate the upgrades, but I'm still a bit hesitant with the price. How about we meet at $170?",
+      "prompt_tokens": 248,
+      "completion_tokens": 25,
+      "latency_ms": 161.87091707251966
+    },
+    {
+      "index": 3,
+      "speaker": "seller",
+      "text": "I understand the hesitation—this bike is in top shape, so I’m willing to meet you at $185, which is still a solid deal. It keeps the value of the upgrades and the low maintenance you’ll enjoy. If that works for you, we’re set!",
+      "prompt_tokens": 288,
+      "completion_tokens": 130,
+      "latency_ms": 238.08287479914725
+    },
+    {
+      "index": 4,
+      "speaker": "buyer",
+      "text": "$185 is closer, but I was really thinking more like $175 to make it worth the purchase for me.",
+      "prompt_tokens": 337,
+      "completion_tokens": 24,
+      "latency_ms": 175.4490421153605
+    },
+    {
+      "index": 5,
+      "speaker": "seller",
+      "text": "I can stretch a bit and meet you at $180, which still keeps the bike’s value and the upgrades you’ll appreciate. This price reflects the low maintenance and performance you’ll get out of it. Let me know if that works for you!",
+      "prompt_tokens": 376,
+      "completion_tokens": 202,
+      "latency_ms": 447.6902501191944
+    }
+  ],
+  "termination": "max_turns",
+  "deal_amount": null,
+  "agents": [
+    {
+      "name": "buyer",
+      "backend": "openai_compat",
+      "model_name": "llama-8b",
+      "model_id": "llama-3.1-8b-instant",
+      "system_prompt": "You are negotiating to buy the seller's used road bicycle, listed at $200.\nYour private budget cap is $150. Never reveal your cap; try to pay as little\nas possible. Keep every reply to at most 3 sentences and stay in character as\nthe buyer - do not narrate or break the fourth wall.\n\nEnding the negotiation:\n- If and only if both sides have clearly agreed on a final price X, end your\n  message with the exact token [DEAL $X] (for example [DEAL $140]).\n- If agreement is clearly impossible, end your message with [WALK_AWAY].\nOtherwise, keep negotiating and do not use either token.",
+      "temperature": 0.7,
+      "max_tokens": 1024
+    },
+    {
+      "name": "seller",
+      "backend": "openai_compat",
+      "model_name": "gpt-oss-20b",
+      "model_id": "openai/gpt-oss-20b",
+      "system_prompt": "You are selling your used road bicycle, listed at $200. Your private\nwalk-away minimum is $120. Never reveal your minimum; try to get as much as\npossible. Keep every reply to at most 3 sentences and stay in character as\nthe seller - do not narrate or break the fourth wall.\n\nEnding the negotiation:\n- If and only if both sides have clearly agreed on a final price X, end your\n  message with the exact token [DEAL $X] (for example [DEAL $140]).\n- If agreement is clearly impossible, end your message with [WALK_AWAY].\nOtherwise, keep negotiating and do not use either token.",
+      "temperature": 0.7,
+      "max_tokens": 2048
+    }
+  ],
+  "opening_speaker": "buyer",
+  "opening_prompt": "You are messaging the seller about the road bicycle they listed for $200. Open the negotiation.",
+  "max_turns": 6,
+  "started_at": "2026-07-14T04:28:50.413654Z",
+  "ended_at": "2026-07-14T04:28:52.832135Z"
+}

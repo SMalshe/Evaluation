@@ -12,3 +12,6 @@ __pycache__/
 
 # Third-party llama.cpp binaries (27 MB), re-fetched by scripts/serve_local.ps1.
 .tools/
+
+# macOS
+.DS_Store
